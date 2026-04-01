@@ -1,18 +1,19 @@
-# R/db_connections.R
 library(DBI)
 library(RPostgres)
 
-# Function to securely connect to Supabase
-connect_supabase <- function() {
-  # Explicitly load the environment variables
+# This securely loads your local passwords when you are coding in RStudio, 
+# but safely ignores it when running in Posit Connect Cloud!
+if (file.exists(".Renviron")) {
   readRenviron(".Renviron")
-  
+}
+
+connect_supabase <- function() {
   dbConnect(
     RPostgres::Postgres(),
+    dbname   = Sys.getenv("SUPABASE_DB"),
     host     = Sys.getenv("SUPABASE_HOST"),
     port     = as.integer(Sys.getenv("SUPABASE_PORT")),
-    dbname   = Sys.getenv("SUPABASE_DB"),
     user     = Sys.getenv("SUPABASE_USER"),
-    password = Sys.getenv("SUPABASE_PASS")
+    password = Sys.getenv("SUPABASE_PASSWORD")
   )
 }
