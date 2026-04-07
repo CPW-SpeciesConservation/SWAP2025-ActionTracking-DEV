@@ -11,25 +11,28 @@ source("R/profile.R")
 source("R/add_action.R")
 source("R/update_action.R")
 
+# Cleaned up theme! We removed the inline bs_add_rules because your custom_styles.css handles it now.
 cpw_theme <- bs_theme(
   version = 5, bg = "#FFFFFF", fg = "#212529", primary = "#0D67B8", 
   secondary = "#ECE8E4", success = "#055A53", warning = "#EAB11E", danger = "#AA5F40", 
   base_font = font_google("Lato"), heading_font = font_google("Lato")
-) |>
-  bs_add_rules(".navbar { background-color: #07234C !important; } .navbar-brand, .nav-link { color: #FFFFFF !important; }")
+)
 
 ui <- page_navbar(
   id = "main_nav", 
   theme = cpw_theme,
   title = div(img(src = "cpw_logo.png", height = "40px", style = "margin-right: 10px; margin-top: -5px;"), "SWAP Action Tracker"),
   
-  # Inject our custom CSS for the sidebar and the dynamic active highlighter
+  # Inject our custom CSS file, plus the dynamic active highlighter
   header = tagList(
+    tags$head(
+      tags$link(rel = "stylesheet", type = "text/css", href = "custom_styles.css")
+    ),
     uiOutput("nav_styles"),
     tags$style(HTML("
       .sidebar-btn {
         width: 100%; text-align: left; background: transparent !important; border: none !important;
-        color: #212529 !important; padding: 12px 15px; border-radius: 6px; font-weight: 600;
+        color: #212529 !important; padding: 12px 15px; border-radius: 6px; font-weight: 900;
         margin-bottom: 5px; box-shadow: none !important; font-size: 1rem; transition: 0.2s;
       }
       .sidebar-btn:hover { background-color: #ECE8E4 !important; color: #07234C !important; }
@@ -38,7 +41,7 @@ ui <- page_navbar(
   
   # Global Sidebar
   sidebar = sidebar(
-    open = "open", 
+    open = "closed", 
     title = p("Menu", style = "font-weight: bold; color: #07234C; font-size: 1.2rem; margin-bottom: 15px; border-bottom: 2px solid #ECE8E4; padding-bottom: 10px;"),
     bg = "#FAFAFA",
     

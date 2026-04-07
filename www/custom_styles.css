@@ -1,0 +1,118 @@
+/* www/custom_styles.css */
+@import url('https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&display=swap');
+/* --- 1. Define Color and Font Variables --- */
+:root {
+  --cpw-midnight: #07234C;
+  --cpw-deep-sky-blue: #0067B8;
+  --cpw-emerald: #055A53;
+  --cpw-terracotta: #AA5F40;
+  --cpw-sunshine: #EAB11E;
+  
+  --cpw-gray-light: #CCCCCC;
+  --cpw-gray-x-light: #EEEEEE;
+  --cpw-gray-xx-light: #FAFAFA;
+  --cpw-white: #FFFFFF;
+
+  --font-sans: 'Lato', 'Myriad Pro', sans-serif;
+  --font-serif: 'Source Serif 4', 'Minion Pro', serif;
+}
+
+/* --- 2. General Body and Text Styling --- */
+body {
+  font-family: var(--font-sans);
+  background-color: var(--cpw-white);
+  color: #333;
+}
+
+h2, h4, h5 {
+  font-family: var(--font-serif);
+  color: var(--cpw-midnight);
+}
+
+/* --- 3. Navbar Styling --- */
+.navbar {
+  /* Gradient fade from Midnight to Emerald */
+  background: linear-gradient(to right, var(--cpw-midnight), var(--cpw-emerald));
+  border-bottom: 3px solid var(--cpw-sunshine);
+}
+
+/* Navbar title and brand text */
+.navbar-brand, .navbar-brand:hover {
+  color: var(--cpw-white) !important;
+  font-family: var(--font-serif);
+  font-size: 1.5rem;
+}
+
+/* --- CORRECTED SELECTOR FOR TAB LINKS --- */
+/* This targets all states of the nav links (active, inactive, hover) */
+.navbar .navbar-nav .nav-link {
+  color: var(--cpw-white) !important; /* Force text to be white */
+}
+
+/* This rule adds the underline to the currently active tab */
+.navbar .navbar-nav .nav-link.active {
+  border-bottom: 2px solid var(--cpw-sunshine);
+}
+
+/* --- 4. Button and Input Styling --- */
+/* Default buttons and success buttons */
+.btn-primary, .btn-success {
+  background-color: var(--cpw-deep-sky-blue);
+  border-color: var(--cpw-deep-sky-blue);
+  font-weight: bold;
+}
+
+.btn-primary:hover, .btn-success:hover {
+  background-color: #00569a; /* A slightly darker blue for hover */
+  border-color: #00569a;
+}
+
+/* Style for text boxes, etc. on focus */
+.form-control:focus {
+  border-color: var(--cpw-deep-sky-blue);
+  box-shadow: 0 0 0 0.2rem rgba(0, 103, 184, 0.25);
+}
+
+/* --- 5. Component Styling --- */
+/* Well panels */
+.well {
+  background-color: var(--cpw-gray-xx-light);
+  border: 1px solid var(--cpw-gray-x-light);
+}
+
+/* Data Table header */
+#verify_module-verification_table table.dataTable thead th {
+  background-color: var(--cpw-midnight);
+  color: var(--cpw-white);
+}
+
+/* Data Table alternating row colors */
+#verify_module-verification_table table.dataTable.display tbody tr.odd {
+  background-color: var(--cpw-white);
+}
+#verify_module-verification_table table.dataTable.display tbody tr.even {
+  background-color: var(--cpw-gray-xx-light);
+}
+
+/* --- 6. Crisp Font Rendering & Faux-Bold Fix --- */
+body, button, .btn, .nav-link, .nav-pills .nav-link, h2, h4, h5 {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-shadow: none !important;
+}
+
+/* Force standard text to use the true normal weight */
+body {
+  font-weight: 400 !important; 
+}
+
+/* Force buttons and headers to use the true bold weight (No more fuzzy stretching!) */
+button, .btn, .nav-link, h2, h4, h5 {
+  font-weight: 700 !important;
+}
+
+/* Remove fuzzy outer glows from clicked buttons */
+.btn:focus, .nav-link:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
