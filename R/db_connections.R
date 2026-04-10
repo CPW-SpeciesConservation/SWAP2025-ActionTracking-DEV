@@ -1,19 +1,23 @@
 library(DBI)
 library(RPostgres)
+library(pool) 
 
-# Safely load local variables, but ignore this step in the cloud!
+# Safely load local variables
 if (file.exists(".Renviron")) {
   readRenviron(".Renviron")
 }
 
-# Wrap the connection in the function your app is looking for
 connect_supabase <- function() {
-  dbConnect(
-    RPostgres::Postgres(),
+
+  dbPool(
+    drv      = RPostgres::Postgres(),
     dbname   = Sys.getenv("SUPABASE_DB"),
     host     = Sys.getenv("SUPABASE_HOST"),
     port     = as.integer(Sys.getenv("SUPABASE_PORT")),
     user     = Sys.getenv("SUPABASE_USER"),
-    password = Sys.getenv("SUPABASE_PASSWORD")
+    password = Sys.getenv("SUPABASE_PASSWORD"),
+    minSize  = 1,
+    maxSize  = 10,
+    idleTimeout = 3600000 # 1 hour
   )
 }

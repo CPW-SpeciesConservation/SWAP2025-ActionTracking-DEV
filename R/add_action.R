@@ -123,7 +123,7 @@ add_action_ui <- function(id) {
   )
 }
 
-add_action_server <- function(id, db, current_user) {
+add_action_server <- function(id, db, current_user, db_sync_trigger) {
   moduleServer(id, function(input, output, session) {
     
     nav_home_trigger <- reactiveVal(0)
@@ -264,7 +264,7 @@ add_action_server <- function(id, db, current_user) {
         detail_val <- if(is.null(input$action_detail) || input$action_detail == "none" || input$action_detail == "") NA_integer_ else as.integer(input$action_detail)
         
         q1 <- "INSERT INTO track.implementedactions (actionl2id, timeframe, actiondesc, status, createdby) VALUES ($1, $2, $3, $4, $5) RETURNING implementedactionid"
-        res1 <- dbGetQuery(db, q1, params = list(as.integer(input$action_l2), input$timeframe, input$action_desc, input$status, current_user()$FirstName))
+        res1 <- dbGetQuery(db, q1, params = list(as.integer(input$action_l2), input$timeframe, input$action_desc, input$status, current_user()$user_id))
         new_impl_id <- res1$implementedactionid[1]
         
         if (is_species) {
@@ -272,15 +272,16 @@ add_action_server <- function(id, db, current_user) {
         } else {
           q2 <- "INSERT INTO track.specieshabitatactions (specieshabitat, habitatsubtypeid, habitatactiondetailid, implementedactionid, createdby) VALUES (FALSE, $1, $2, $3, $4) RETURNING specieshabitatactionsid"
         }
-        res2 <- dbGetQuery(db, q2, params = list(target_id, detail_val, new_impl_id, current_user()$FirstName))
+        res2 <- dbGetQuery(db, q2, params = list(target_id, detail_val, new_impl_id, current_user()$user_id))
         new_sha_id <- res2$specieshabitatactionsid[1]
         
         q3 <- "INSERT INTO track.threatsaddressed (specieshabitatactionsid, threatl2id, createdby, justification) VALUES ($1, $2, $3, $4)"
         for (t_id in selected_threats) {
-          dbExecute(db, q3, params = list(new_sha_id, as.integer(t_id), current_user()$FirstName, input[[paste0("just_threat_a_", t_id)]]))
+          dbExecute(db, q3, params = list(new_sha_id, as.integer(t_id), current_user()$user_id, input[[paste0("just_threat_a_", t_id)]]))
         }
         
         dbCommit(db)
+        db_sync_trigger(db_sync_trigger() + 1)
         showNotification("Success! Action recorded to database.", type = "message", duration = 5)
         
         updateTextAreaInput(session, "action_desc", value = "")
@@ -431,13 +432,13 @@ add_action_server <- function(id, db, current_user) {
         dbBegin(db)
         
         q1 <- "INSERT INTO track.implementedactions (actionl2id, timeframe, actiondesc, status, createdby) VALUES ($1, $2, $3, $4, $5) RETURNING implementedactionid"
-        res1 <- dbGetQuery(db, q1, params = list(as.integer(input$act_l2), input$act_timeframe, input$act_desc, input$act_status, current_user()$FirstName))
+        res1 <- dbGetQuery(db, q1, params = list(as.integer(input$act_l2), input$act_timeframe, input$act_desc, input$act_status, current_user()$user_id))
         new_impl_id <- res1$implementedactionid[1]
         
         if (length(sel_sp) > 0) {
           for (sp_id in sel_sp) {
             q2 <- "INSERT INTO track.specieshabitatactions (specieshabitat, speciesid, implementedactionid, createdby) VALUES (TRUE, $1, $2, $3) RETURNING specieshabitatactionsid"
-            res2 <- dbGetQuery(db, q2, params = list(sp_id, new_impl_id, current_user()$FirstName))
+            res2 <- dbGetQuery(db, q2, params = list(sp_id, new_impl_id, current_user()$user_id))
             new_sha_id <- res2$specieshabitatactionsid[1]
             
             threats <- dbGetQuery(db, "SELECT threatl2id FROM xref.species_threatsl2 WHERE speciesid = $1", params = list(sp_id))
@@ -445,7 +446,7 @@ add_action_server <- function(id, db, current_user) {
               chk_val <- input[[paste0("act_chk_sp_", sp_id, "_", t_id)]]
               if (!is.null(chk_val) && chk_val == TRUE) {
                 txt_val <- input[[paste0("act_txt_sp_", sp_id, "_", t_id)]]
-                dbExecute(db, "INSERT INTO track.threatsaddressed (specieshabitatactionsid, threatl2id, createdby, justification) VALUES ($1, $2, $3, $4)", params = list(new_sha_id, t_id, current_user()$FirstName, txt_val))
+                dbExecute(db, "INSERT INTO track.threatsaddressed (specieshabitatactionsid, threatl2id, createdby, justification) VALUES ($1, $2, $3, $4)", params = list(new_sha_id, t_id, current_user()$user_id, txt_val))
               }
             }
           }
@@ -454,7 +455,7 @@ add_action_server <- function(id, db, current_user) {
         if (length(sel_hab) > 0) {
           for (hab_id in sel_hab) {
             q2 <- "INSERT INTO track.specieshabitatactions (specieshabitat, habitatsubtypeid, implementedactionid, createdby) VALUES (FALSE, $1, $2, $3) RETURNING specieshabitatactionsid"
-            res2 <- dbGetQuery(db, q2, params = list(hab_id, new_impl_id, current_user()$FirstName))
+            res2 <- dbGetQuery(db, q2, params = list(hab_id, new_impl_id, current_user()$user_id))
             new_sha_id <- res2$specieshabitatactionsid[1]
             
             threats <- dbGetQuery(db, "SELECT threatl2id FROM xref.habitat_threatsl2 WHERE habitatsubtypeid = $1", params = list(hab_id))
@@ -462,13 +463,14 @@ add_action_server <- function(id, db, current_user) {
               chk_val <- input[[paste0("act_chk_hab_", hab_id, "_", t_id)]]
               if (!is.null(chk_val) && chk_val == TRUE) {
                 txt_val <- input[[paste0("act_txt_hab_", hab_id, "_", t_id)]]
-                dbExecute(db, "INSERT INTO track.threatsaddressed (specieshabitatactionsid, threatl2id, createdby, justification) VALUES ($1, $2, $3, $4)", params = list(new_sha_id, t_id, current_user()$FirstName, txt_val))
+                dbExecute(db, "INSERT INTO track.threatsaddressed (specieshabitatactionsid, threatl2id, createdby, justification) VALUES ($1, $2, $3, $4)", params = list(new_sha_id, t_id, current_user()$user_id, txt_val))
               }
             }
           }
         }
         
         dbCommit(db)
+        db_sync_trigger(db_sync_trigger() + 1)
         showNotification("Success! Multi-target action recorded.", type = "message", duration = 5)
         updateTextAreaInput(session, "act_desc", value = "")
         updateSelectizeInput(session, "act_target_species", selected = character(0))
