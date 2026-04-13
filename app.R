@@ -6,6 +6,12 @@ library(DT)
 library(shinyjs)
 library(memoise)
 library(cachem)
+library(ggplot2)
+library(plotly)
+library(networkD3)
+library(visNetwork)
+library(igraph)
+library(ggraph)
 
 # Source all helpers and modules
 source("R/db_connections.R")
@@ -61,7 +67,6 @@ ui <- page_navbar(
   nav_panel_hidden(value = "update_action", update_action_ui("update_action")), 
   nav_panel_hidden(value = "profile", profile_ui("profile"))
 )
-
 
 server <- function(input, output, session) {
   # 1. Real Auth State (Starts completely empty!)
