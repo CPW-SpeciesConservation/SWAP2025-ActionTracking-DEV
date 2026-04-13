@@ -10,9 +10,9 @@ add_action_ui <- function(id) {
     
     h3("Report a New Action", class = "mb-4"),
     
-    # --- STEP 1: APPROACH ---
+    # --- APPROACH SELECTION ---
     div(class = "card mb-4 shadow-sm", style = "overflow: visible;",
-        div(class = "card-header bg-primary text-white", "Step 1: Choose Your Approach"),
+        div(class = "card-header bg-primary text-white", "Recording Approach"),
         div(class = "card-body", style = "overflow: visible;",
             radioButtons(ns("wizard_path"), "How would you like to record this action?",
                          choices = c("Species/Habitat oriented" = "species", "Action oriented" = "action"),
@@ -27,7 +27,7 @@ add_action_ui <- function(id) {
       condition = sprintf("input['%s'] == 'species'", ns("wizard_path")),
       
       div(class = "card mb-4 shadow-sm", style = "overflow: visible;",
-          div(class = "card-header bg-secondary text-white", "Step 2: Explore Target"),
+          div(class = "card-header bg-secondary text-white", "Target Selection"),
           div(class = "card-body", style = "overflow: visible;",
               radioButtons(ns("target_type"), "Target Type:", choices = c("Species", "Habitat"), inline = TRUE),
               
@@ -53,7 +53,7 @@ add_action_ui <- function(id) {
       conditionalPanel(
         condition = sprintf("(input['%s'] == 'Species' && input['%s'] != '') || (input['%s'] == 'Habitat' && input['%s'] != '')", ns("target_type"), ns("species_select"), ns("target_type"), ns("habitat_subtype")),
         div(class = "card mb-4 shadow-sm", style = "overflow: visible;",
-            div(class = "card-header bg-primary text-white", "Step 3: Action Details & Threats"),
+            div(class = "card-header bg-primary text-white", "Action Details & Mitigated Threats"),
             div(class = "card-body", style = "overflow: visible;",
                 layout_columns(
                   selectInput(ns("timeframe"), "Timeframe Filter", choices = c("Short Term", "Long Term")),
@@ -70,7 +70,6 @@ add_action_ui <- function(id) {
                 h5("Threats Addressed"),
                 p("Select the threats this action mitigates. A justification box will appear for each threat you select:"),
                 
-                # Replaced old checkbox group with fully dynamic, grouped UI
                 uiOutput(ns("dynamic_threats_ui_path_a")),
                 
                 actionButton(ns("btn_submit_species"), "Submit Action to Database", class = "btn-success btn-lg mt-4 w-100")
@@ -86,7 +85,7 @@ add_action_ui <- function(id) {
       condition = sprintf("input['%s'] == 'action'", ns("wizard_path")),
       
       div(class = "card mb-4 shadow-sm", style = "overflow: visible;",
-          div(class = "card-header bg-secondary text-white", "Step 2: Define the Action"),
+          div(class = "card-header bg-secondary text-white", "Action Definition"),
           div(class = "card-body", style = "overflow: visible;",
               p("Use the Action Lexicon below as a guide to find your exact L0, L1, and L2 actions."),
               div(class = "text-center mb-4", tags$img(src = "action_lexicon.png", class = "img-fluid border rounded shadow-sm", style = "max-height: 400px; width: auto;")),
@@ -106,7 +105,7 @@ add_action_ui <- function(id) {
       conditionalPanel(
         condition = sprintf("input['%s'] != ''", ns("act_l2")),
         div(class = "card mb-4 shadow-sm", style = "overflow: visible;",
-            div(class = "card-header bg-primary text-white", "Step 3: Select Targets & Mitigated Threats"),
+            div(class = "card-header bg-primary text-white", "Target Selection & Mitigated Threats"),
             div(class = "card-body", style = "overflow: visible;",
                 p(strong("Based on your selected Action and Timeframe, select all applicable Species and Habitats this project targets. Then, assign the specific threats it mitigates for each target.")),
                 layout_columns(
@@ -183,7 +182,6 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
       if (nrow(valid_details) > 0) updateSelectizeInput(session, "action_detail", choices = c("None (Optional)" = "none", setNames(valid_details$detail_id, valid_details$detail_text)))
       else updateSelectizeInput(session, "action_detail", choices = c("No Details Found for this Timeframe" = "none"))
       
-      # THE FIX: Added L0 JOIN and added L0_context to the SELECT statement
       q_threats <- if(is_species) {
         "SELECT l2.threatl2id, l2.threatl2code || '. ' || l2.threatl2name AS threat_name, l1.threatl1code || '. ' || l1.threatl1name AS l1_context, l0.threatl0name AS l0_context
          FROM xref.species_threatsl2 x 
@@ -204,7 +202,6 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
       valid_threats_df_a(dbGetQuery(db, q_threats, params = list(target_id)))
     })
     
-    # GROUPED UI FOR PATH A (Nested L0 -> L1 -> L2)
     output$dynamic_threats_ui_path_a <- renderUI({
       vt <- valid_threats_df_a()
       if (nrow(vt) == 0) return(p(em("No threats mapped to this target.")))
@@ -213,13 +210,11 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
       lapply(l0_groups, function(l0) {
         sub_l0 <- vt[vt$l0_context == l0, ]
         div(class = "mb-4",
-            # L0 Header (Green)
             h5(l0, style="color: #055A53; font-weight: bold; border-bottom: 3px solid #07234C; padding-bottom: 5px; margin-top: 20px;"),
             
             lapply(unique(sub_l0$l1_context), function(l1) {
               sub_l1 <- sub_l0[sub_l0$l1_context == l1, ]
               div(class = "mb-3 ms-4",
-                  # L1 Header (Navy)
                   h6(l1, style="color: #07234C; font-weight: bold; border-bottom: 1px solid #CCCCCC; padding-bottom: 3px; font-size: 1.05em; margin-top: 10px;"),
                   
                   lapply(1:nrow(sub_l1), function(i) {
@@ -257,30 +252,32 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
         }
       }
       
+      # THE FIX: Using poolWithTransaction for proper execution and rollback safety
       tryCatch({
-        dbBegin(db)
-        is_species <- input$target_type == "Species"
-        target_id <- as.integer(if(is_species) input$species_select else input$habitat_subtype)
-        detail_val <- if(is.null(input$action_detail) || input$action_detail == "none" || input$action_detail == "") NA_integer_ else as.integer(input$action_detail)
+        pool::poolWithTransaction(db, function(conn) {
+          is_species <- input$target_type == "Species"
+          target_id <- as.integer(if(is_species) input$species_select else input$habitat_subtype)
+          detail_val <- if(is.null(input$action_detail) || input$action_detail == "none" || input$action_detail == "") NA_integer_ else as.integer(input$action_detail)
+          
+          q1 <- "INSERT INTO track.implementedactions (actionl2id, timeframe, actiondesc, status, createdby) VALUES ($1, $2, $3, $4, $5) RETURNING implementedactionid"
+          res1 <- dbGetQuery(conn, q1, params = list(as.integer(input$action_l2), input$timeframe, input$action_desc, input$status, current_user()$user_id))
+          new_impl_id <- res1$implementedactionid[1]
+          
+          if (is_species) {
+            q2 <- "INSERT INTO track.specieshabitatactions (specieshabitat, speciesid, speciesactiondetailid, implementedactionid, createdby) VALUES (TRUE, $1, $2, $3, $4) RETURNING specieshabitatactionsid"
+          } else {
+            q2 <- "INSERT INTO track.specieshabitatactions (specieshabitat, habitatsubtypeid, habitatactiondetailid, implementedactionid, createdby) VALUES (FALSE, $1, $2, $3, $4) RETURNING specieshabitatactionsid"
+          }
+          res2 <- dbGetQuery(conn, q2, params = list(target_id, detail_val, new_impl_id, current_user()$user_id))
+          new_sha_id <- res2$specieshabitatactionsid[1]
+          
+          q3 <- "INSERT INTO track.threatsaddressed (specieshabitatactionsid, threatl2id, createdby, justification) VALUES ($1, $2, $3, $4)"
+          for (t_id in selected_threats) {
+            dbExecute(conn, q3, params = list(new_sha_id, as.integer(t_id), current_user()$user_id, input[[paste0("just_threat_a_", t_id)]]))
+          }
+        })
         
-        q1 <- "INSERT INTO track.implementedactions (actionl2id, timeframe, actiondesc, status, createdby) VALUES ($1, $2, $3, $4, $5) RETURNING implementedactionid"
-        res1 <- dbGetQuery(db, q1, params = list(as.integer(input$action_l2), input$timeframe, input$action_desc, input$status, current_user()$user_id))
-        new_impl_id <- res1$implementedactionid[1]
-        
-        if (is_species) {
-          q2 <- "INSERT INTO track.specieshabitatactions (specieshabitat, speciesid, speciesactiondetailid, implementedactionid, createdby) VALUES (TRUE, $1, $2, $3, $4) RETURNING specieshabitatactionsid"
-        } else {
-          q2 <- "INSERT INTO track.specieshabitatactions (specieshabitat, habitatsubtypeid, habitatactiondetailid, implementedactionid, createdby) VALUES (FALSE, $1, $2, $3, $4) RETURNING specieshabitatactionsid"
-        }
-        res2 <- dbGetQuery(db, q2, params = list(target_id, detail_val, new_impl_id, current_user()$user_id))
-        new_sha_id <- res2$specieshabitatactionsid[1]
-        
-        q3 <- "INSERT INTO track.threatsaddressed (specieshabitatactionsid, threatl2id, createdby, justification) VALUES ($1, $2, $3, $4)"
-        for (t_id in selected_threats) {
-          dbExecute(db, q3, params = list(new_sha_id, as.integer(t_id), current_user()$user_id, input[[paste0("just_threat_a_", t_id)]]))
-        }
-        
-        dbCommit(db)
+        # Code down here only executes if the transaction completes successfully
         db_sync_trigger(db_sync_trigger() + 1)
         showNotification("Success! Action recorded to database.", type = "message", duration = 5)
         
@@ -292,7 +289,6 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
         nav_home_trigger(nav_home_trigger() + 1)
         
       }, error = function(e) {
-        dbRollback(db)
         showNotification(paste("Database Error:", e$message), type = "error", duration = 10)
       })
     })
@@ -330,7 +326,6 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
       } else { updateSelectizeInput(session, "act_target_habitats", choices = character(0), options = list(placeholder = "No habitats mapped to this action.", dropdownParent = "body")) }
     })
     
-    # GROUPED UI FOR PATH B (Nested L0 -> L1 -> L2)
     output$dynamic_target_threats_ui_path_b <- renderUI({
       sel_sp <- input$act_target_species
       sel_hab <- input$act_target_habitats
@@ -428,48 +423,50 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
         return()
       }
       
+      # THE FIX: Using poolWithTransaction for proper execution and rollback safety
       tryCatch({
-        dbBegin(db)
-        
-        q1 <- "INSERT INTO track.implementedactions (actionl2id, timeframe, actiondesc, status, createdby) VALUES ($1, $2, $3, $4, $5) RETURNING implementedactionid"
-        res1 <- dbGetQuery(db, q1, params = list(as.integer(input$act_l2), input$act_timeframe, input$act_desc, input$act_status, current_user()$user_id))
-        new_impl_id <- res1$implementedactionid[1]
-        
-        if (length(sel_sp) > 0) {
-          for (sp_id in sel_sp) {
-            q2 <- "INSERT INTO track.specieshabitatactions (specieshabitat, speciesid, implementedactionid, createdby) VALUES (TRUE, $1, $2, $3) RETURNING specieshabitatactionsid"
-            res2 <- dbGetQuery(db, q2, params = list(sp_id, new_impl_id, current_user()$user_id))
-            new_sha_id <- res2$specieshabitatactionsid[1]
-            
-            threats <- dbGetQuery(db, "SELECT threatl2id FROM xref.species_threatsl2 WHERE speciesid = $1", params = list(sp_id))
-            for (t_id in threats$threatl2id) {
-              chk_val <- input[[paste0("act_chk_sp_", sp_id, "_", t_id)]]
-              if (!is.null(chk_val) && chk_val == TRUE) {
-                txt_val <- input[[paste0("act_txt_sp_", sp_id, "_", t_id)]]
-                dbExecute(db, "INSERT INTO track.threatsaddressed (specieshabitatactionsid, threatl2id, createdby, justification) VALUES ($1, $2, $3, $4)", params = list(new_sha_id, t_id, current_user()$user_id, txt_val))
+        pool::poolWithTransaction(db, function(conn) {
+          
+          q1 <- "INSERT INTO track.implementedactions (actionl2id, timeframe, actiondesc, status, createdby) VALUES ($1, $2, $3, $4, $5) RETURNING implementedactionid"
+          res1 <- dbGetQuery(conn, q1, params = list(as.integer(input$act_l2), input$act_timeframe, input$act_desc, input$act_status, current_user()$user_id))
+          new_impl_id <- res1$implementedactionid[1]
+          
+          if (length(sel_sp) > 0) {
+            for (sp_id in sel_sp) {
+              q2 <- "INSERT INTO track.specieshabitatactions (specieshabitat, speciesid, implementedactionid, createdby) VALUES (TRUE, $1, $2, $3) RETURNING specieshabitatactionsid"
+              res2 <- dbGetQuery(conn, q2, params = list(sp_id, new_impl_id, current_user()$user_id))
+              new_sha_id <- res2$specieshabitatactionsid[1]
+              
+              threats <- dbGetQuery(conn, "SELECT threatl2id FROM xref.species_threatsl2 WHERE speciesid = $1", params = list(sp_id))
+              for (t_id in threats$threatl2id) {
+                chk_val <- input[[paste0("act_chk_sp_", sp_id, "_", t_id)]]
+                if (!is.null(chk_val) && chk_val == TRUE) {
+                  txt_val <- input[[paste0("act_txt_sp_", sp_id, "_", t_id)]]
+                  dbExecute(conn, "INSERT INTO track.threatsaddressed (specieshabitatactionsid, threatl2id, createdby, justification) VALUES ($1, $2, $3, $4)", params = list(new_sha_id, t_id, current_user()$user_id, txt_val))
+                }
               }
             }
           }
-        }
-        
-        if (length(sel_hab) > 0) {
-          for (hab_id in sel_hab) {
-            q2 <- "INSERT INTO track.specieshabitatactions (specieshabitat, habitatsubtypeid, implementedactionid, createdby) VALUES (FALSE, $1, $2, $3) RETURNING specieshabitatactionsid"
-            res2 <- dbGetQuery(db, q2, params = list(hab_id, new_impl_id, current_user()$user_id))
-            new_sha_id <- res2$specieshabitatactionsid[1]
-            
-            threats <- dbGetQuery(db, "SELECT threatl2id FROM xref.habitat_threatsl2 WHERE habitatsubtypeid = $1", params = list(hab_id))
-            for (t_id in threats$threatl2id) {
-              chk_val <- input[[paste0("act_chk_hab_", hab_id, "_", t_id)]]
-              if (!is.null(chk_val) && chk_val == TRUE) {
-                txt_val <- input[[paste0("act_txt_hab_", hab_id, "_", t_id)]]
-                dbExecute(db, "INSERT INTO track.threatsaddressed (specieshabitatactionsid, threatl2id, createdby, justification) VALUES ($1, $2, $3, $4)", params = list(new_sha_id, t_id, current_user()$user_id, txt_val))
+          
+          if (length(sel_hab) > 0) {
+            for (hab_id in sel_hab) {
+              q2 <- "INSERT INTO track.specieshabitatactions (specieshabitat, habitatsubtypeid, implementedactionid, createdby) VALUES (FALSE, $1, $2, $3) RETURNING specieshabitatactionsid"
+              res2 <- dbGetQuery(conn, q2, params = list(hab_id, new_impl_id, current_user()$user_id))
+              new_sha_id <- res2$specieshabitatactionsid[1]
+              
+              threats <- dbGetQuery(conn, "SELECT threatl2id FROM xref.habitat_threatsl2 WHERE habitatsubtypeid = $1", params = list(hab_id))
+              for (t_id in threats$threatl2id) {
+                chk_val <- input[[paste0("act_chk_hab_", hab_id, "_", t_id)]]
+                if (!is.null(chk_val) && chk_val == TRUE) {
+                  txt_val <- input[[paste0("act_txt_hab_", hab_id, "_", t_id)]]
+                  dbExecute(conn, "INSERT INTO track.threatsaddressed (specieshabitatactionsid, threatl2id, createdby, justification) VALUES ($1, $2, $3, $4)", params = list(new_sha_id, t_id, current_user()$user_id, txt_val))
+                }
               }
             }
           }
-        }
+        })
         
-        dbCommit(db)
+        # Code down here only executes if the transaction completes successfully
         db_sync_trigger(db_sync_trigger() + 1)
         showNotification("Success! Multi-target action recorded.", type = "message", duration = 5)
         updateTextAreaInput(session, "act_desc", value = "")
@@ -478,7 +475,6 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
         nav_home_trigger(nav_home_trigger() + 1)
         
       }, error = function(e) {
-        dbRollback(db)
         showNotification(paste("Database Error:", e$message), type = "error", duration = 10)
       })
     })
