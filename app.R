@@ -12,6 +12,7 @@ library(networkD3)
 library(visNetwork)
 library(igraph)
 library(ggraph)
+library(heatmaply)
 
 # Source all helpers and modules
 source("R/db_connections.R")
@@ -69,7 +70,6 @@ ui <- page_navbar(
 )
 
 server <- function(input, output, session) {
-  # 1. Real Auth State (Starts completely empty!)
   current_user <- reactiveVal(NULL)
   
   # Session Timeout Watchdog
@@ -91,11 +91,11 @@ server <- function(input, output, session) {
   
   observeEvent(db_sync_trigger(), {
     if (db_sync_trigger() > 0) {
-      global_db_cache$reset() # Because dashboard.R is sourced above, app.R knows what this is!
+      global_db_cache$reset() 
     }
   }, ignoreInit = TRUE)
   
-  # 2. Database Connection
+  # Database Connection
   db <- connect_supabase()
   onStop(function() { pool::poolClose(db) })
   
@@ -107,15 +107,14 @@ server <- function(input, output, session) {
   update_action_server("update_action", db, current_user, db_sync_trigger)
   
   output$dynamic_sidebar <- renderUI({
-    # We use req() or a clear NULL check
     if (is.null(current_user())) {
       tagList(
-        actionButton("nav_dash", "Dashboard Home", class = "sidebar-btn"),
+        actionButton("nav_dash", "Dashboard", class = "sidebar-btn"),
         actionButton("nav_login", "Login / Register", class = "sidebar-btn")
       )
     } else {
       tagList(
-        actionButton("nav_dash", "Dashboard Home", class = "sidebar-btn"),
+        actionButton("nav_dash", "Dashboard", class = "sidebar-btn"),
         actionButton("nav_add", "Report New Action", class = "sidebar-btn"),
         actionButton("nav_update", "Update Existing Action", class = "sidebar-btn"),
         actionButton("nav_profile", "My Profile", class = "sidebar-btn")
@@ -141,10 +140,8 @@ server <- function(input, output, session) {
     ")))
   })
   
-  # 5. Cross-Navigation Logic
   observeEvent(input$nav_dash, { nav_select("main_nav", "dashboard") })
   
-  # Only listen for go_home if add_triggers actually exists
   observe({
     req(add_triggers)
     observeEvent(add_triggers$go_home(), {

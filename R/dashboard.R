@@ -2,13 +2,14 @@ library(memoise)
 library(cachem)
 library(ggplot2)
 library(plotly)
+library(ggiraph) 
+library(stringr) 
+library(dplyr)
 library(igraph)
 library(ggraph)
-library(ggiraph) # NEW: For interactive edge bundling
-library(stringr) # NEW: For wrapping long labels
-library(dplyr)
+library(heatmaply)
 
-# --- GLOBAL SHARED CACHE ---
+# "global" cache of track schema data
 global_db_cache <- cachem::cache_mem(max_age = 3600)
 
 get_dash_tax_groups <- memoise(function(db) {
@@ -23,7 +24,7 @@ get_dash_l0_actions <- memoise(function(db) {
   dbGetQuery(db, "SELECT DISTINCT l0.actionl0id, l0.actionl0name FROM proj.l0_actions l0 JOIN proj.l1_actions l1 ON l0.actionl0id = l1.actionl0id JOIN proj.l2_actions l2 ON l1.actionl1id = l2.actionl1id JOIN track.implementedactions ia ON l2.actionl2id = ia.actionl2id ORDER BY l0.actionl0name")
 }, cache = global_db_cache)
 
-# --------------------------------
+
 
 dashboard_ui <- function(id) {
   ns <- NS(id)
@@ -50,9 +51,7 @@ dashboard_ui <- function(id) {
     navset_underline(
       id = ns("dash_tabs"),
       
-      # ==========================================
-      # TAB 1: EXPLORE BY TARGET
-      # ==========================================
+      # TAB 1: EXPLORE BY Species/Habitat (sometimes referred to collectively as "target")
       nav_panel("Explore by Species/Habitat", 
                 fluidRow(
                   column(width = 4,
@@ -114,9 +113,7 @@ dashboard_ui <- function(id) {
                 )
       ),
       
-      # ==========================================
       # TAB 2: EXPLORE BY ACTION
-      # ==========================================
       nav_panel("Explore by Action",
                 fluidRow(
                   column(width = 4,
@@ -170,14 +167,13 @@ dashboard_ui <- function(id) {
                 )
       ),
       
-      # ==========================================
-      # TAB 3: ALL ACTIONS DIRECTORY
-      # ==========================================
+   
+      # TAB 3: ALL ACTIONS interactive table
       nav_panel("All Actions List",
                 fluidRow(
                   column(width = 4,
                          div(class = "card shadow-sm mb-3",
-                             div(class = "card-header text-white", style = "background-color: #055A53;", "Global Action Directory"),
+                             div(class = "card-header text-white", style = "background-color: #055A53;", "Tracked Actions"),
                              div(class = "card-body",
                                  DTOutput(ns("all_actions_table"))
                              )
@@ -197,7 +193,7 @@ dashboard_ui <- function(id) {
                            fluidRow(
                              column(width = 6,
                                     div(class = "card shadow-sm mb-3",
-                                        div(class = "card-header text-white fw-bold", style = "background-color: #0D67B8;", "Targets & Details"),
+                                        div(class = "card-header text-white fw-bold", style = "background-color: #0D67B8;", "Targeted Species & Habitats"),
                                         div(class = "card-body", uiOutput(ns("all_act_targets_ui")))
                                     ),
                                     div(class = "card shadow-sm mb-3",
@@ -217,36 +213,39 @@ dashboard_ui <- function(id) {
                 )
       ),
       
-      # ==========================================
-      # TAB 4: SYSTEM CONNECTIVITY
-      # ==========================================
-      nav_panel("System Connectivity Explorer",
+      # TAB 4: Visulization
+      nav_panel("Visualizing Actions, Species/Habitats, & Threats Connections",
                 div(class = "mt-3",
                     div(class = "card shadow-sm mb-4",
-                        div(class = "card-header text-white", style = "background-color: #AA5F40;", "Connectivity Filters"),
+                        div(class = "card-header text-white", style = "background-color: #AA5F40;", "Filters and Figures"),
                         div(class = "card-body",
                             layout_columns(
-                              selectInput(ns("conn_filter_type"), "View Connections for:", choices = c("All Targets", "Species Only", "Habitats Only")),
+                              selectInput(ns("conn_filter_type"), "Filter:", choices = c("All", "Species Only", "Habitats Only")),
                               radioButtons(ns("conn_chart_choice"), "Select Visualization:", 
-                                           choices = c("Sankey Flow" = "sankey", "Interactive Edge Bundling" = "bundling"), 
+                                           choices = c("Sankey Chart" = "sankey", 
+                                                       "Chord Graph" = "bipartite",
+                                                       "Threats Heatmap" = "heatmap"), 
                                            inline = TRUE)
                             ),
-                            p(em("Visualize how L2 Actions flow into Mitigated Threats and benefit specific Targets.", class="text-muted small"))
+                            p(em("Visualize exactly how Conservation Actions flow through specific Targets to mitigate Threats.", class="text-muted small"))
                         )
                     ),
                     div(class = "card shadow-sm",
                         div(class = "card-body", style = "min-height: 750px; display: flex; justify-content: center; overflow: hidden;",
                             
-                            # THE FIX: Swapped to Plotly for Sankey
                             conditionalPanel(
                               condition = sprintf("input['%s'] == 'sankey'", ns("conn_chart_choice")),
                               plotlyOutput(ns("sankey_plot"), height = "700px", width = "100%")
                             ),
                             
-                            # THE FIX: Swapped to ggiraph for Edge Bundling
                             conditionalPanel(
-                              condition = sprintf("input['%s'] == 'bundling'", ns("conn_chart_choice")),
-                              girafeOutput(ns("heb_plot"), width = "100%", height = "800px")
+                              condition = sprintf("input['%s'] == 'bipartite'", ns("conn_chart_choice")),
+                              girafeOutput(ns("bipartite_plot"), width = "100%", height = "750px")
+                            ),
+                            
+                            conditionalPanel(
+                              condition = sprintf("input['%s'] == 'heatmap'", ns("conn_chart_choice")),
+                              plotlyOutput(ns("heatmap_plot"), height = "700px", width = "100%")
                             )
                         )
                     )
@@ -258,10 +257,8 @@ dashboard_ui <- function(id) {
 
 dashboard_server <- function(id, db, db_sync_trigger) {
   moduleServer(id, function(input, output, session) {
-    
-    # ---------------------------------------------------------
+
     # SHARED DROPDOWNS / TAB 1 & 2 LOGIC
-    # ---------------------------------------------------------
     observe({
       db_sync_trigger() 
       tax_groups <- get_dash_tax_groups(db)
@@ -339,9 +336,9 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       datatable(df, selection = 'single', rownames = F, options = list(pageLength = 4, dom = 'tp')) 
     })
     
-    # ---------------------------------------------------------
+  
     # TAB 2 LOGIC (EXPLORE BY ACTION)
-    # ---------------------------------------------------------
+    
     observeEvent(input$dash_l0, {
       req(input$dash_l0); q <- "SELECT DISTINCT l1.actionl1id, l1.actionl1code || '. ' || l1.actionl1name AS n FROM proj.l1_actions l1 JOIN proj.l2_actions l2 ON l1.actionl1id = l2.actionl1id JOIN track.implementedactions ia ON l2.actionl2id = ia.actionl2id WHERE l1.actionl0id = $1 ORDER BY n"
       res <- dbGetQuery(db, q, params = list(input$dash_l0)); updateSelectInput(session, "dash_l1", choices = c("Select L1..." = "", setNames(res$actionl1id, res$n)))
@@ -400,9 +397,9 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       datatable(df, selection = 'single', rownames = F, options = list(pageLength = 4, dom = 'tp'))
     })
     
-    # ---------------------------------------------------------
-    # TAB 3 LOGIC (ALL ACTIONS DIRECTORY)
-    # ---------------------------------------------------------
+ 
+    # TAB 3 LOGIC (ALL ACTIONS Table)
+   
     all_actions_data <- reactive({
       db_sync_trigger(); q <- "SELECT ia.implementedactionid, l2.actionl2name AS \"L2 Action\", ia.timeframe AS \"Timeframe\", ia.status AS \"Status\" FROM track.implementedactions ia JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id ORDER BY CASE WHEN ia.status = 'Completed' THEN 1 WHEN ia.status = 'In Progress' THEN 2 WHEN ia.status = 'Planned' THEN 3 ELSE 4 END ASC, ia.createdon DESC"
       dbGetQuery(db, q)
@@ -436,171 +433,389 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       tagList(p(strong("Date: "), res$d, br(), strong(paste0("Metric (", res$m, "): ")), res$v, br(), strong("User: "), res$u), p(strong("Notes: "), br(), em(res$n)))
     })
     
-    # ---------------------------------------------------------
-    # TAB 4 LOGIC (SYSTEM CONNECTIVITY)
-    # ---------------------------------------------------------
+ 
+    # TAB 4 LOGIC (Figures)
+   
     links_data <- reactive({
       db_sync_trigger()
+      
       query <- "
-        SELECT ia.actionl2id, l2a.actionl2name AS source_name, ta.threatl2id, l2t.threatl2name AS threat_name,
-          CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_name,
-          CASE WHEN sha.specieshabitat = TRUE THEN tg.groupname ELSE mh.majorhabitatname END AS group_context,
+        SELECT 
+          l0a.actionl0id, TRIM(COALESCE(l0a.actionl0name, 'Unknown')) AS actionl0name, 
+          l1a.actionl1id, TRIM(COALESCE(l1a.actionl1name, 'Unknown')) AS actionl1name, 
+          l2a.actionl2id, TRIM(l2a.actionl2code) AS actionl2code, TRIM(l2a.actionl2name) AS source_name,
+          l0t.threatl0id, TRIM(COALESCE(l0t.threatl0name, 'Unknown')) AS threatl0name, 
+          l1t.threatl1id, TRIM(COALESCE(l1t.threatl1name, 'Unknown')) AS threatl1name, 
+          l2t.threatl2id, TRIM(l2t.threatl2code) AS threatl2code, TRIM(l2t.threatl2name) AS threat_name,
+          CASE WHEN sha.specieshabitat = TRUE THEN TRIM(s.commonname) ELSE TRIM(hs.habitatsubtypename) END AS target_name,
+          CASE WHEN sha.specieshabitat = TRUE THEN TRIM(tg.groupname) ELSE TRIM(mh.majorhabitatname) END AS group_context,
           CASE WHEN sha.specieshabitat = TRUE THEN 'Species' ELSE 'Habitat' END AS target_type
         FROM track.implementedactions ia
         JOIN proj.l2_actions l2a ON ia.actionl2id = l2a.actionl2id
+        LEFT JOIN proj.l1_actions l1a ON l2a.actionl1id = l1a.actionl1id
+        LEFT JOIN proj.l0_actions l0a ON l1a.actionl0id = l0a.actionl0id
         JOIN track.specieshabitatactions sha ON ia.implementedactionid = sha.implementedactionid
         JOIN track.threatsaddressed ta ON sha.specieshabitatactionsid = ta.specieshabitatactionsid
         JOIN proj.l2_threats l2t ON ta.threatl2id = l2t.threatl2id
+        LEFT JOIN proj.l1_threats l1t ON l2t.threatl1id = l1t.threatl1id
+        LEFT JOIN proj.l0_threats l0t ON l1t.threatl0id = l0t.threatl0id
         LEFT JOIN proj.species s ON sha.speciesid = s.speciesid
         LEFT JOIN proj.taxonomicgroups tg ON s.taxonomicgroupid = tg.taxonomicgroupid
         LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid
         LEFT JOIN proj.majorhabitats mh ON hs.majorhabitatid = mh.majorhabitatid
       "
       df <- dbGetQuery(db, query)
+      
+      if (nrow(df) > 0) {
+        df <- df %>%
+          filter(
+            !actionl0name %in% c("D. None", "Unknown", "None"), 
+            actionl2code != "11.1",                          
+            !grepl("\\.9$", threatl2code),
+            !threatl0name %in% c("Unknown Threats", "Unknown", "None"),
+            threatl1id != 4
+          )
+      }
       if (input$conn_filter_type == "Species Only") df <- df %>% filter(target_type == "Species")
       if (input$conn_filter_type == "Habitats Only") df <- df %>% filter(target_type == "Habitat")
+      
       return(df)
     })
     
-    # THE FIX: Upgraded to Plotly Sankey
+    # --- 4A. Plotly Sankey (Action -> Target -> Threat) ---
     output$sankey_plot <- renderPlotly({
       df <- links_data(); req(nrow(df) > 0)
       
-      # Step 1: Create distinct lists but track what category they belong to
-      l1 <- df %>% group_by(source_name, threat_name) %>% summarize(value = n(), .groups = "drop") %>% rename(source = source_name, target = threat_name) %>% mutate(src_type="Action", tgt_type="Threat")
-      l2 <- df %>% group_by(threat_name, target_name) %>% summarize(value = n(), .groups = "drop") %>% rename(source = threat_name, target = target_name) %>% mutate(src_type="Threat", tgt_type="Target")
-      
-      # Step 2: Build a master node dictionary (Prefix guarantees uniqueness under the hood)
-      all_sources <- bind_rows(
-        l1 %>% select(name_raw = source, type = src_type),
-        l2 %>% select(name_raw = source, type = src_type)
-      )
-      all_targets <- bind_rows(
-        l1 %>% select(name_raw = target, type = tgt_type),
-        l2 %>% select(name_raw = target, type = tgt_type)
+      df <- df %>% mutate(
+        source_name_full = paste(actionl2code, source_name, sep=" "),
+        threat_name_full = paste(threatl2code, threat_name, sep=" ")
       )
       
-      nodes_df <- bind_rows(all_sources, all_targets) %>% 
-        distinct() %>%
+      l1 <- df %>% group_by(source_name_full, target_name, target_type) %>% summarize(value = n(), .groups = "drop") %>% 
+        rename(source = source_name_full, target = target_name) %>% mutate(src_type="Action", tgt_type=target_type)
+      
+      l2 <- df %>% group_by(target_name, threat_name_full, target_type) %>% summarize(value = n(), .groups = "drop") %>% 
+        rename(source = target_name, target = threat_name_full) %>% mutate(src_type=target_type, tgt_type="Threat")
+      
+      acts <- df %>% select(name_raw = source_name_full, l0=actionl0id, l1=actionl1id, l2=actionl2id) %>% distinct() %>% arrange(l0, l1, l2) %>% mutate(type="Action", x=0.01)
+      acts$y <- seq(0.01, 0.99, length.out = nrow(acts))
+      
+      targs <- df %>% select(name_raw = target_name, target_type, group_context) %>% distinct() %>% arrange(desc(target_type), group_context, name_raw) %>% mutate(type=target_type, x=0.5)
+      targs$y <- seq(0.01, 0.99, length.out = nrow(targs))
+      
+      thrs <- df %>% select(name_raw = threat_name_full, l0=threatl0id, l1=threatl1id, l2=threatl2id) %>% distinct() %>% arrange(l0, l1, l2) %>% mutate(type="Threat", x=0.99)
+      thrs$y <- seq(0.01, 0.99, length.out = nrow(thrs))
+      
+      nodes_df <- bind_rows(acts, targs, thrs) %>%
         mutate(
-          unique_id = paste0(type, "_", name_raw), # Hidden unique ID
-          color = case_when(
-            type == "Action" ~ "#0D67B8",
-            type == "Threat" ~ "#AA5F40",
-            type == "Target" ~ "#055A53"
-          )
+          unique_id = paste0(type, "_", name_raw), 
+          idx = 0:(n()-1),
+          color = case_when(type == "Action" ~ "#0D67B8", type == "Threat" ~ "#AA5F40", type == "Species" ~ "#055A53", type == "Habitat" ~ "#43956F")
         )
       
-      # Add 0-based index for plotly
-      nodes_df$idx <- 0:(nrow(nodes_df) - 1)
-      
-      # Step 3: Map links to the 0-based index
-      links <- bind_rows(l1, l2) %>%
-        mutate(
-          source_uid = paste0(src_type, "_", source),
-          target_uid = paste0(tgt_type, "_", target)
-        )
+      links <- bind_rows(l1, l2) %>% mutate(source_uid = paste0(src_type, "_", source), target_uid = paste0(tgt_type, "_", target))
       links$source_id <- nodes_df$idx[match(links$source_uid, nodes_df$unique_id)]
       links$target_id <- nodes_df$idx[match(links$target_uid, nodes_df$unique_id)]
       
-      # Step 4: Render the Plotly Sankey
       plot_ly(
-        type = "sankey", orientation = "h",
-        node = list(
-          label = nodes_df$name_raw, # Clean display names!
-          color = nodes_df$color,
-          pad = 15, thickness = 20,
-          line = list(color = "black", width = 0.5),
-          hovertemplate = "<b>%{label}</b><br>Total Connections: %{value}<extra></extra>"
-        ),
-        link = list(
-          source = links$source_id,
-          target = links$target_id,
-          value = links$value,
-          color = "rgba(200, 200, 200, 0.4)",
-          hovertemplate = "<b>Source:</b> %{source.label}<br><b>Target:</b> %{target.label}<extra></extra>"
-        )
+        type = "sankey", orientation = "h", valueformat = "d", arrangement = "fixed",
+        node = list(label = nodes_df$name_raw, color = nodes_df$color, x = nodes_df$x, y = nodes_df$y, pad = 15, thickness = 20, line = list(color = "black", width = 0.5), hovertemplate = "<b>%{label}</b><br>Total Links: %{value:d}<extra></extra>"),
+        link = list(source = links$source_id, target = links$target_id, value = links$value, color = "rgba(200, 200, 200, 0.4)", hovertemplate = "<b>Source:</b> %{source.label}<br><b>Destination:</b> %{target.label}<br><b>Connections:</b> %{value:d}<extra></extra>")
       ) %>% layout(
-        font = list(size = 12),
-        margin = list(t = 60, b = 20, l = 20, r = 20),
-        # THE FIX: Add explicit column headers
+        font = list(size = 12), margin = list(t = 60, b = 20, l = 20, r = 20),
         annotations = list(
           list(x = 0, y = 1.05, text = "<b>Actions</b>", showarrow = FALSE, xref = "paper", yref = "paper", xanchor = "left", font = list(size = 16)),
-          list(x = 0.5, y = 1.05, text = "<b>Mitigated Threats</b>", showarrow = FALSE, xref = "paper", yref = "paper", xanchor = "center", font = list(size = 16)),
-          list(x = 1, y = 1.05, text = "<b>Targets</b>", showarrow = FALSE, xref = "paper", yref = "paper", xanchor = "right", font = list(size = 16))
+          list(x = 0.5, y = 1.05, text = "<b>Targets</b>", showarrow = FALSE, xref = "paper", yref = "paper", xanchor = "center", font = list(size = 16)),
+          list(x = 1, y = 1.05, text = "<b>Mitigated Threats</b>", showarrow = FALSE, xref = "paper", yref = "paper", xanchor = "right", font = list(size = 16))
         )
       ) %>% config(displayModeBar = FALSE)
     })
     
-    # THE FIX: Upgraded to ggiraph for interactive edge bundling
-    output$heb_plot <- renderGirafe({
-      df <- links_data(); req(nrow(df) > 0)
+    # --- 4B. Interactive Circular Hierarchy (Sunburst Style) ---
+    output$bipartite_plot <- renderGirafe({
+      df <- links_data()
       
-      df_heb <- df %>%
-        mutate(source_name = paste("Action:", source_name),
-               threat_name = paste("Threat:", threat_name),
-               target_name = paste("Target:", target_name))
+      # 1. Fetch Full Lexicon with correct nesting
+      q_act <- "SELECT l0a.actionl0id, TRIM(COALESCE(l0a.actionl0name, 'Unknown')) AS l0, l1a.actionl1id, TRIM(COALESCE(l1a.actionl1name, 'Unknown')) AS l1, l2a.actionl2id, TRIM(l2a.actionl2code) AS code, TRIM(l2a.actionl2name) AS name FROM proj.l2_actions l2a LEFT JOIN proj.l1_actions l1a ON l2a.actionl1id = l1a.actionl1id LEFT JOIN proj.l0_actions l0a ON l1a.actionl0id = l0a.actionl0id"
+      q_thr <- "SELECT l0t.threatl0id, TRIM(COALESCE(l0t.threatl0name, 'Unknown')) AS l0, l1t.threatl1id, TRIM(COALESCE(l1t.threatl1name, 'Unknown')) AS l1, l2t.threatl2id, TRIM(l2t.threatl2code) AS code, TRIM(l2t.threatl2name) AS name FROM proj.l2_threats l2t LEFT JOIN proj.l1_threats l1t ON l2t.threatl1id = l1t.threatl1id LEFT JOIN proj.l0_threats l0t ON l1t.threatl0id = l0t.threatl0id"
       
-      edges_at <- df_heb %>% select(from = source_name, to = threat_name) %>% distinct()
-      edges_tt <- df_heb %>% select(from = threat_name, to = target_name) %>% distinct()
-      connections <- bind_rows(edges_at, edges_tt)
+      # Force perfectly numerical sort
+      actions <- dbGetQuery(db, q_act) %>% filter(!l0 %in% c("D. None", "Unknown", "None"), code != "11.1") %>% 
+        mutate(major_code = suppressWarnings(as.numeric(sub("\\..*", "", code))), minor_code = suppressWarnings(as.numeric(sub(".*\\.", "", code)))) %>%
+        arrange(l0, major_code, minor_code) %>% mutate(type = "Action")
       
-      hier_L1 <- data.frame(from = "Root", to = c("Actions", "Threats", "Targets"))
-      hier_act <- data.frame(from = "Actions", to = unique(df_heb$source_name))
-      hier_thr <- data.frame(from = "Threats", to = unique(df_heb$threat_name))
-      hier_targ <- data.frame(from = "Targets", to = unique(df_heb$target_name))
+      threats <- dbGetQuery(db, q_thr) %>% filter(!grepl("\\.9$", code), !l0 %in% c("Unknown Threats", "Unknown", "None"), threatl1id != 4) %>% 
+        mutate(major_code = suppressWarnings(as.numeric(sub("\\..*", "", code))), minor_code = suppressWarnings(as.numeric(sub(".*\\.", "", code)))) %>%
+        arrange(l0, major_code, minor_code) %>% mutate(type = "Threat")
       
-      hierarchy <- bind_rows(hier_L1, hier_act, hier_thr, hier_targ) %>% distinct()
+      # 2. Calculate Angular Positions
+      n_act <- nrow(actions)
+      act_angles <- seq(105 * pi/180, 255 * pi/180, length.out = max(2, n_act))
+      actions <- actions %>% mutate(angle = act_angles, x = cos(angle), y = sin(angle), raw_deg = angle * 180 / pi, rad_angle = raw_deg - 180, hjust = 1)
       
-      vertices <- data.frame(name = unique(c("Root", hierarchy$from, hierarchy$to)))
-      vertices <- vertices %>%
-        mutate(
-          group = case_when(
-            name %in% hier_act$to ~ "Action",
-            name %in% hier_thr$to ~ "Threat",
-            name %in% hier_targ$to ~ "Target",
-            TRUE ~ "Root"
-          ),
-          clean_name = sub(".*: ", "", name),
-          # Wrap labels to 25 chars so they don't stick out infinitely
-          wrapped_name = stringr::str_wrap(clean_name, width = 25), 
-          # Create HTML hover text
-          hover_text = paste0("<b>", group, "</b><br>", clean_name)
+      n_thr <- nrow(threats)
+      thr_angles <- seq(75 * pi/180, -75 * pi/180, length.out = max(2, n_thr))
+      threats <- threats %>% mutate(angle = thr_angles, x = cos(angle), y = sin(angle), raw_deg = angle * 180 / pi, rad_angle = raw_deg, hjust = 0)
+      
+      nodes_df <- bind_rows(actions, threats) %>% mutate(safe_id = paste0("node_", row_number()), full_text = paste(code, name, sep=" "))
+      
+      # 3. Dynamic Solid Radial Spokes for L1 separators
+      separators <- data.frame()
+      if (n_act > 1) {
+        act_bounds <- actions %>% mutate(idx = row_number()) %>% group_by(l1) %>% summarize(max_idx = max(idx), .groups="drop") %>% arrange(max_idx) %>% filter(max_idx < nrow(actions))
+        act_sep_angles <- if(nrow(act_bounds) > 0) (actions$angle[act_bounds$max_idx] + actions$angle[act_bounds$max_idx + 1]) / 2 else numeric(0)
+        separators <- rbind(separators, data.frame(angle = act_sep_angles, type="Action"))
+      }
+      if (n_thr > 1) {
+        thr_bounds <- threats %>% mutate(idx = row_number()) %>% group_by(l1) %>% summarize(max_idx = max(idx), .groups="drop") %>% arrange(max_idx) %>% filter(max_idx < nrow(threats))
+        thr_sep_angles <- if(nrow(thr_bounds) > 0) (threats$angle[thr_bounds$max_idx] + threats$angle[thr_bounds$max_idx + 1]) / 2 else numeric(0)
+        separators <- rbind(separators, data.frame(angle = thr_sep_angles, type="Threat"))
+      }
+      
+      separators <- separators %>% mutate(x_in = 0.95 * cos(angle), y_in = 0.95 * sin(angle), x_out = 2.10 * cos(angle), y_out = 2.10 * sin(angle))
+      
+      # 4. Ring 2: L1 Labels (Placed between spokes)
+      l1_labels <- bind_rows(
+        actions %>% group_by(l1) %>% summarize(angle = mean(angle), .groups="drop") %>% mutate(r = 1.35, text_angle = angle * 180/pi - 180, hjust=1),
+        threats %>% group_by(l1) %>% summarize(angle = mean(angle), .groups="drop") %>% mutate(r = 1.35, text_angle = angle * 180/pi, hjust=0)
+      )
+      
+      # 5. Ring 3: Custom L0 Arcs (Brackets)
+      l0_arcs <- bind_rows(
+        actions %>% group_by(l0) %>% summarize(start = min(angle), end = max(angle), .groups="drop") %>% mutate(type="Action"),
+        threats %>% group_by(l0) %>% summarize(start = min(angle), end = max(angle), .groups="drop") %>% mutate(type="Threat")
+      ) %>% mutate(
+        label = stringr::str_wrap(l0, 25),
+        raw_mid = (start + end) / 2, 
+        raw_deg = raw_mid * 180 / pi,
+        r_arc = 2.15,
+        r_label = 2.35
+      )
+      
+      arc_df <- bind_rows(lapply(1:nrow(l0_arcs), function(i) {
+        a_seq <- seq(l0_arcs$start[i], l0_arcs$end[i], length.out = 50)
+        data.frame(x = l0_arcs$r_arc[i] * cos(a_seq), y = l0_arcs$r_arc[i] * sin(a_seq), group = l0_arcs$l0[i])
+      }))
+      
+      l0_labels_df <- l0_arcs %>% mutate(
+        text_angle = case_when(
+          type == "Action" ~ raw_deg - 90,
+          type == "Threat" & raw_deg >= 0 ~ raw_deg - 90, 
+          type == "Threat" & raw_deg < 0 ~ raw_deg + 90   
+        ),
+        hjust = 0.5
+      )
+      
+      # 6. Ring 4: Master Background Watermarks
+      bg_labels <- data.frame(x = c(-3.1, 3.1), y = c(0, 0), label = c("ACTIONS", "THREATS"), angle = c(90, 270))
+      
+      # 7. Map the active connections
+      edges_df <- data.frame()
+      if(nrow(df) > 0) {
+        edges_df <- df %>%
+          left_join(nodes_df %>% filter(type == "Action") %>% select(actionl2code = code, x1 = x, y1 = y), by = "actionl2code") %>%
+          left_join(nodes_df %>% filter(type == "Threat") %>% select(threatl2code = code, x2 = x, y2 = y), by = "threatl2code") %>%
+          mutate(hover_text = paste0("<b>Target:</b> ", target_name, " (", group_context, ")<br><b>Action:</b> ", actionl2code, " ", source_name, "<br><b>Threat:</b> ", threatl2code, " ", threat_name), safe_edge_id = paste0("edge_", row_number()))
+      }
+      
+      # 8. Build the Plot
+      p <- ggplot() +
+        geom_text(data = bg_labels, aes(x=x, y=y, label=label, angle=angle), size=14, color="grey90", fontface="bold") +
+        geom_segment(data=separators, aes(x=x_in, y=y_in, xend=x_out, yend=y_out), color="grey70", linewidth=0.5, linetype="dashed")
+      
+      if(nrow(edges_df) > 0) {
+        # We use the 'hover_css' and 'tooltip' to define the interaction 
+        # but rely on the CSS in girafe() to manage the visual thickness.
+        p <- p + geom_curve_interactive(
+          data = edges_df, 
+          aes(x = x1, y = y1, xend = x2, yend = y2, 
+              color = group_context, 
+              linetype = target_type, 
+              tooltip = hover_text, 
+              data_id = safe_edge_id), 
+          curvature = 0.1, 
+          alpha = 0.6, 
+          linewidth = 0.3
+        )
+      }
+      
+      p <- p + 
+        geom_point_interactive(data = nodes_df, aes(x = x, y = y, tooltip = full_text, data_id = safe_id), size = 3, color = "#212529") +
+        geom_text_interactive(data = nodes_df, aes(x = 1.06*cos(angle), y = 1.06*sin(angle), label = code, angle = rad_angle, hjust = hjust, tooltip = full_text), size = 3, fontface = "bold", color = "#212529") +
+        geom_text(data=l1_labels, aes(x=r*cos(angle), y=r*sin(angle), label=stringr::str_wrap(l1, 25), angle=text_angle, hjust=hjust), size=2.8, color="#AA5F40", fontface="bold") +
+        geom_path(data = arc_df, aes(x = x, y = y, group = group), color = "#07234c", linewidth = 1.2) +
+        geom_text(data = l0_labels_df, aes(x = r_label*cos(raw_mid), y = r_label*sin(raw_mid), label = label, angle = text_angle, hjust = hjust), size = 3.5, color = "#0D67B8", fontface = "bold") +
+        scale_linetype_manual(name = "Target Type", values = c("Species" = "solid", "Habitat" = "dashed")) +
+        scale_color_viridis_d(name = "Target Group", option = "turbo") + 
+        labs(caption = "💡 Click the magnifying glass (without the box) in the top right to enable click-and-drag panning.") +
+        expand_limits(x = c(-3.6, 3.6), y = c(-2.8, 2.8)) + 
+        theme_void() +
+        theme(
+          legend.position = "right", 
+          legend.box = "vertical", 
+          legend.title = element_text(face = "bold"), 
+          plot.caption = element_text(color = "grey40", size = 11, face = "italic", hjust = 0.5),
+          plot.margin = margin(10, 10, 10, 10)
         )
       
-      mygraph <- graph_from_data_frame(hierarchy, vertices = vertices)
-      from_idx <- match(connections$from, vertices$name)
-      to_idx <- match(connections$to, vertices$name)
-      
-      p <- ggraph(mygraph, layout = 'dendrogram', circular = TRUE) +
-        geom_conn_bundle(data = get_con(from = from_idx, to = to_idx),
-                         alpha = 0.2, width = 0.8, color = "#AA5F40", tension = 0.7) +
-        # THE FIX: Use standard ggiraph geoms and map x/y manually, filtering for leaves directly in the data argument
-        geom_point_interactive(aes(x = x, y = y, color = group, tooltip = hover_text, data_id = name), 
-                               data = function(d) subset(d, leaf), size = 3) +
-        # Interactive Text
-        geom_text_interactive(aes(x = x * 1.08, y = y * 1.08, 
-                                  label = wrapped_name,
-                                  tooltip = hover_text,
-                                  data_id = name,
-                                  angle = ifelse(node_angle(x,y) > 90 & node_angle(x,y) < 270, node_angle(x,y) + 180, node_angle(x,y)),
-                                  hjust = ifelse(node_angle(x,y) > 90 & node_angle(x,y) < 270, 1, 0)),
-                              data = function(d) subset(d, leaf),
-                              size = 3.5, color = "#212529", fontface = "bold") +
-        scale_color_manual(values = c("Action" = "#0D67B8", "Threat" = "#AA5F40", "Target" = "#055A53")) +
-        theme_void() +
-        theme(legend.position = "bottom", 
-              legend.title = element_blank(),
-              legend.text = element_text(size = 12, face = "bold"),
-              plot.margin = margin(80, 80, 80, 80)) +
-        coord_cartesian(clip = "off")
-      
-      # Convert to ggiraph widget
-      girafe(ggobj = p, width_svg = 12, height_svg = 12,
+      # Build the final Girafe object
+      girafe(ggobj = p, width_svg = 18, height_svg = 12,
              options = list(
-               opts_hover(css = "fill:#EAB11E;stroke:black;stroke-width:2px;cursor:pointer;"),
+               opts_sizing(rescale = TRUE, width = 1),
+               opts_zoom(min = 1, max = 10),
+               opts_toolbar(position = "topright", saveaspng = TRUE),
+       
+               opts_hover(css = "stroke:black;stroke-width:1.5px;cursor:pointer;stroke-opacity:1;opacity:1;"),
+               opts_hover_inv(css = "opacity:0.8;"),
                opts_tooltip(css = "background-color:white;color:black;padding:10px;border-radius:5px;box-shadow:2px 2px 5px rgba(0,0,0,0.3);")
              ))
+    })
+    # --- 4C. Absolute Domain Matrix (The Masterpiece) ---
+    output$heatmap_plot <- renderPlotly({
+      df <- links_data()
+      
+      # 1. Pull lexicon
+      q_act <- "SELECT l0a.actionl0id, TRIM(COALESCE(l0a.actionl0name, 'Unknown')) AS l0, l1a.actionl1id, TRIM(COALESCE(l1a.actionl1name, 'Unknown')) AS l1, l2a.actionl2id, TRIM(COALESCE(l2a.actionl2code, 'Uncoded')) AS l2c, TRIM(COALESCE(l2a.actionl2name, 'Unknown')) AS l2n FROM proj.l2_actions l2a LEFT JOIN proj.l1_actions l1a ON l2a.actionl1id = l1a.actionl1id LEFT JOIN proj.l0_actions l0a ON l1a.actionl0id = l0a.actionl0id"
+      q_thr <- "SELECT l0t.threatl0id, TRIM(COALESCE(l0t.threatl0name, 'Unknown')) AS l0, l1t.threatl1id, TRIM(COALESCE(l1t.threatl1name, 'Unknown')) AS l1, l2t.threatl2id, TRIM(COALESCE(l2t.threatl2code, 'Uncoded')) AS l2c, TRIM(COALESCE(l2t.threatl2name, 'Unknown')) AS l2n FROM proj.l2_threats l2t LEFT JOIN proj.l1_threats l1t ON l2t.threatl1id = l1t.threatl1id LEFT JOIN proj.l0_threats l0t ON l1t.threatl0id = l0t.threatl0id"
+      
+      # Force perfectly numerical sorting (8, 9, 10, 11)
+      y_axis_df <- dbGetQuery(db, q_act) %>% 
+        filter(!l0 %in% c("D. None", "Unknown", "None"), l2c != "11.1") %>% 
+        mutate(
+          major_code = suppressWarnings(as.numeric(sub("\\..*", "", l2c))),
+          minor_code = suppressWarnings(as.numeric(sub(".*\\.", "", l2c)))
+        ) %>%
+        arrange(l0, major_code, minor_code)
+      
+      x_axis_df <- dbGetQuery(db, q_thr) %>% 
+        filter(!grepl("\\.9$", l2c), !l0 %in% c("Unknown Threats", "Unknown", "None"), threatl1id != 4) %>% 
+        mutate(
+          major_code = suppressWarnings(as.numeric(sub("\\..*", "", l2c))),
+          minor_code = suppressWarnings(as.numeric(sub(".*\\.", "", l2c)))
+        ) %>%
+        arrange(l0, major_code, minor_code)
+      
+      # Lock factor levels
+      y_axis_df$l2c_factor <- factor(y_axis_df$l2c, levels = unique(y_axis_df$l2c))
+      x_axis_df$l2c_factor <- factor(x_axis_df$l2c, levels = unique(x_axis_df$l2c))
+      
+      # 2. Compile Main Grid Counts
+      actual_counts <- data.frame()
+      if (nrow(df) > 0) {
+        actual_counts <- df %>% group_by(actionl2id, threatl2id) %>% summarize(total_logs = n(), target_count = n_distinct(target_name), target_list = paste(sort(unique(target_name)), collapse = ", "), .groups = "drop")
+      }
+      
+      z_main <- matrix(0, nrow = nrow(y_axis_df), ncol = nrow(x_axis_df))
+      text_main <- matrix("", nrow = nrow(y_axis_df), ncol = nrow(x_axis_df))
+      
+      for (r in 1:nrow(y_axis_df)) {
+        for (c in 1:nrow(x_axis_df)) {
+          match_idx <- which(actual_counts$actionl2id == y_axis_df$actionl2id[r] & actual_counts$threatl2id == x_axis_df$threatl2id[c])
+          if (length(match_idx) > 0) {
+            val <- actual_counts$target_count[match_idx]
+            logs <- actual_counts$total_logs[match_idx]
+            t_list <- paste(strwrap(actual_counts$target_list[match_idx], width = 45), collapse = "<br>")
+            z_main[r, c] <- val
+            text_main[r, c] <- paste0("<b>Action:</b> ", y_axis_df$l2c[r], " - ", y_axis_df$l2n[r], "<br><br><b>Threat:</b> ", x_axis_df$l2c[c], " - ", x_axis_df$l2n[c], "<br><br><b>Total Implementation Logs:</b> ", logs, "<br><b>Distinct Targets:</b> ", val, "<br><b>Targets Addressed:</b><br><i>", t_list, "</i>")
+          } else {
+            z_main[r, c] <- 0
+            text_main[r, c] <- paste0("<b>Action:</b> ", y_axis_df$l2c[r], " - ", y_axis_df$l2n[r], "<br><b>Threat:</b> ", x_axis_df$l2c[c], " - ", x_axis_df$l2n[c], "<br><br>No Targets Addressed")
+          }
+        }
+      }
+      
+      # 3. Generate distinct color IDs
+      y_axis_df$l0_z <- as.numeric(factor(y_axis_df$l0, levels = unique(y_axis_df$l0)))
+      y_axis_df$l1_z <- as.numeric(factor(y_axis_df$l1, levels = unique(y_axis_df$l1))) + max(y_axis_df$l0_z)
+      
+      x_axis_df$l0_z <- as.numeric(factor(x_axis_df$l0, levels = unique(x_axis_df$l0))) + max(y_axis_df$l1_z)
+      x_axis_df$l1_z <- as.numeric(factor(x_axis_df$l1, levels = unique(x_axis_df$l1))) + max(x_axis_df$l0_z)
+      
+      total_cats <- max(x_axis_df$l1_z)
+      
+      z_left <- cbind(y_axis_df$l0_z, y_axis_df$l1_z)
+      z_bottom <- rbind(x_axis_df$l0_z, x_axis_df$l1_z)
+      
+      hover_left <- cbind(paste("L0 Action:", y_axis_df$l0), paste("L1 Action:", y_axis_df$l1))
+      hover_bottom <- rbind(paste("L0 Threat:", x_axis_df$l0), paste("L1 Threat:", x_axis_df$l1))
+      
+      # 4. Custom Scales
+      cpw_main_scale <- list(
+        c(0, "white"),          
+        c(0.001, "#9ecae1"),    
+        c(1, "#07234c")         
+      )
+      
+      base_colors <- c("#8DD3C7", "#FFFFB3", "#BEBADA", "#FB8072", "#80B1D3", "#FDB462", "#B3DE69", "#FCCDE5", "#D9D9D9", "#BC80BD", "#CCEBC5", "#FFED6F", "#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99", "#E31A1C", "#FDBF6F", "#FF7F00", "#CAB2D6", "#6A3D9A", "#FFFF99", "#B15928")
+      full_palette <- colorRampPalette(base_colors)(total_cats)
+      axis_colorscale <- list()
+      for(i in 1:total_cats) { axis_colorscale[[i]] <- c((i-1)/(total_cats-1), full_palette[i]) }
+      
+      # 5. Text Annotations
+      helper_wrap <- function(x, w) gsub("\n", "<br>", stringr::str_wrap(x, width = w))
+      ann_list <- list()
+      
+      # THE FIX: Decoupled Main Axis Titles safely tucked within the expanded margins
+      ann_list[[length(ann_list)+1]] <- list(xref="paper", yref="paper", x=0.56, y=-0.8, text="<b>Threats (L2 Code)</b>", showarrow=FALSE, font=list(size=14, color="black"))
+      ann_list[[length(ann_list)+1]] <- list(xref="paper", yref="paper", x=-0.08, y=0.56, text="<b>Actions (L2 Code)</b>", textangle=-90, showarrow=FALSE, font=list(size=14, color="black"))
+      
+      l0_blocks <- y_axis_df %>% mutate(idx = row_number() - 1) %>% group_by(l0) %>% summarize(mid = mean(idx), .groups="drop")
+      for(i in 1:nrow(l0_blocks)) { ann_list[[length(ann_list)+1]] <- list(xref="x2", yref="y2", x=0, y=l0_blocks$mid[i], text=paste0("<b>", helper_wrap(l0_blocks$l0[i], 12), "</b>"), textangle=-90, showarrow=FALSE, font=list(size=10, color="black")) }
+      
+      l1_blocks <- y_axis_df %>% mutate(idx = row_number() - 1) %>% group_by(l1) %>% summarize(mid = mean(idx), .groups="drop")
+      for(i in 1:nrow(l1_blocks)) { ann_list[[length(ann_list)+1]] <- list(xref="x2", yref="y2", x=1, y=l1_blocks$mid[i], text=paste0("<b>", helper_wrap(l1_blocks$l1[i], 18), "</b>"), textangle=0, showarrow=FALSE, font=list(size=8, color="black")) }
+      
+      l0_t_blocks <- x_axis_df %>% mutate(idx = row_number() - 1) %>% group_by(l0) %>% summarize(mid = mean(idx), .groups="drop")
+      for(i in 1:nrow(l0_t_blocks)) { ann_list[[length(ann_list)+1]] <- list(xref="x3", yref="y3", x=l0_t_blocks$mid[i], y=0, text=paste0("<b>", l0_t_blocks$l0[i], "</b>"), textangle=0, showarrow=FALSE, font=list(size=10, color="black")) }
+      
+      l1_t_blocks <- x_axis_df %>% mutate(idx = row_number() - 1) %>% group_by(l1) %>% summarize(mid = mean(idx), .groups="drop")
+      for(i in 1:nrow(l1_t_blocks)) { ann_list[[length(ann_list)+1]] <- list(xref="x3", yref="y3", x=l1_t_blocks$mid[i], y=1, text=paste0("<b>", helper_wrap(l1_t_blocks$l1[i], 18), "</b>"), textangle=0, showarrow=FALSE, font=list(size=8, color="black")) }
+      
+      # 6. Build the Locked Traces
+      plot_ly() %>%
+        add_trace(
+          type = "heatmap", x = x_axis_df$l2c_factor, y = y_axis_df$l2c_factor, z = z_main, text = text_main,
+          hoverinfo = "text", colorscale = cpw_main_scale, xaxis = "x", yaxis = "y",
+          xgap = 1, ygap = 1,
+          colorbar = list(title="<b>Distinct<br>Targets</b>", x=1.02, y=0.5, yanchor="middle", len=0.6, dtick=1) 
+        ) %>%
+        add_trace(
+          type = "heatmap", x = c("L0 Action", "L1 Action"), y = y_axis_df$l2c_factor, z = z_left, text = hover_left,
+          hoverinfo = "text", zmin=1, zmax=total_cats, colorscale = axis_colorscale, showscale = FALSE, xaxis = "x2", yaxis = "y2",
+          xgap = 0, ygap = 0 
+        ) %>%
+        add_trace(
+          type = "heatmap", x = x_axis_df$l2c_factor, y = c("L0 Threat", "L1 Threat"), z = z_bottom, text = hover_bottom,
+          hoverinfo = "text", zmin=1, zmax=total_cats, colorscale = axis_colorscale, showscale = FALSE, xaxis = "x3", yaxis = "y3",
+          xgap = 0, ygap = 0 
+        ) %>%
+        layout(
+          plot_bgcolor = "black",   
+          paper_bgcolor = "white",  
+          annotations = ann_list,
+          
+          # White masks dropping beneath the axes
+          shapes = list(
+            list(type = "rect", x0 = 0.07, x1 = 0.11, xref = "paper", y0 = 0, y1 = 1, yref = "paper", fillcolor = "white", line = list(color = "white"), layer = "below"),
+            list(type = "rect", x0 = 0, x1 = 1, xref = "paper", y0 = 0.07, y1 = 0.11, yref = "paper", fillcolor = "white", line = list(color = "white"), layer = "below"),
+            list(type = "rect", x0 = 0, x1 = 0.11, xref = "paper", y0 = 0, y1 = 0.11, yref = "paper", fillcolor = "white", line = list(color = "white"), layer = "below")
+          ),
+          
+          # THE FIX: `range` explicitly prevents Plotly from adding 5% padding. The Black Borders are dead!
+          xaxis  = list(domain = c(0.11, 1.0), type = "category", side = "bottom", showticklabels = TRUE, tickangle = 0, tickfont = list(color="black", size=11, face="bold"), fixedrange = TRUE, title = "", range = c(-0.5, nrow(x_axis_df) - 0.5)),
+          yaxis  = list(domain = c(0.11, 1.0), type = "category", side = "left", showticklabels = TRUE, tickfont = list(color="black", size=11, face="bold"), fixedrange = TRUE, title = "", range = c(-0.5, nrow(y_axis_df) - 0.5)),
+          
+          # Left Blocks (Range restricted from -0.5 to 1.5 because there are 2 columns)
+          xaxis2 = list(domain = c(0.0, 0.07), type = "category", showticklabels = FALSE, fixedrange = TRUE, range = c(-0.5, 1.5)),
+          yaxis2 = list(domain = c(0.11, 1.0), type = "category", side = "left", showticklabels = FALSE, matches = "y", fixedrange = TRUE),
+          
+          # Bottom Blocks (Range restricted from -0.5 to 1.5 because there are 2 rows)
+          xaxis3 = list(domain = c(0.11, 1.0), type = "category", showticklabels = FALSE, matches = "x", fixedrange = TRUE),
+          yaxis3 = list(domain = c(0.0, 0.07), type = "category", showticklabels = FALSE, fixedrange = TRUE, range = c(-0.5, 1.5)),
+          
+          # Increased Left Margin for the Actions Label
+          margin = list(l = 150, r = 20, b = 120, t = 40)
+        ) %>% config(displayModeBar = FALSE)
     })
     
   }) 
