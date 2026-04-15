@@ -70,7 +70,7 @@ dashboard_ui <- function(id) {
                                    selectizeInput(ns("dash_habitat"), "Habitat Subtype", choices = c("Select a major habitat first..." = ""),options = list(dropdownParent = "body"))
                                  ),
                                  hr(class = "my-4"),
-                                 h6("Tracked Actions for Selected Target", class = "fw-bold text-muted"),
+                                 h6("Tracked Actions for Selected Species/Habitat", class = "fw-bold text-muted"),
                                  DTOutput(ns("target_actions_table"))
                              )
                          )
@@ -124,7 +124,7 @@ dashboard_ui <- function(id) {
                                  selectizeInput(ns("dash_l1"), "Level 1 Category", choices = c("Select Level 0 first..." = ""),options = list(dropdownParent = "body")),
                                  selectizeInput(ns("dash_l2"), "Level 2 Action", choices = c("Select Level 1 first..." = ""),options = list(dropdownParent = "body")),
                                  hr(class = "my-4"),
-                                 h6("Targets for Selected Action", class = "fw-bold text-muted"),
+                                 # h6("Actions Table", class = "fw-bold text-muted"),
                                  DTOutput(ns("action_targets_table"))
                              )
                          )

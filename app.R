@@ -35,7 +35,6 @@ ui <- page_navbar(
   theme = cpw_theme,
   title = div(img(src = "cpw_logo.png", height = "40px", style = "margin-right: 10px; margin-top: -5px;"), "SWAP Action Tracker"),
   
-  # Inject our custom CSS file, plus the dynamic active highlighter
   header = tagList(
     useShinyjs(),
     tags$head(
@@ -43,26 +42,29 @@ ui <- page_navbar(
     ),
     uiOutput("nav_styles"),
     tags$style(HTML("
+     /* Your existing sidebar button styles */
       .sidebar-btn {
         width: 100%; text-align: left; background: transparent !important; border: none !important;
         color: #212529 !important; padding: 12px 15px; border-radius: 6px; font-weight: 900;
         margin-bottom: 5px; box-shadow: none !important; font-size: 1rem; transition: 0.2s;
       }
       .sidebar-btn:hover { background-color: #ECE8E4 !important; color: #07234C !important; }
+      
+    
+      .navbar-toggler { display: none !important; }
     "))
   ),
   
-  # Global Sidebar (Dynamic based on login state)
+  # Global Sidebar 
   sidebar = sidebar(
     open = "closed", 
     title = p("Menu", style = "font-weight: bold; color: #07234C; font-size: 1.2rem; margin-bottom: 15px; border-bottom: 2px solid #ECE8E4; padding-bottom: 10px;"),
     bg = "#FAFAFA",
-    
-    # Let the server decide which buttons to show!
+ 
     uiOutput("dynamic_sidebar")
   ),
   
-  nav_panel("Dashboard", value = "dashboard", dashboard_ui("dashboard")),
+  nav_panel_hidden( value = "dashboard", dashboard_ui("dashboard")),
   nav_panel_hidden(value = "login", auth_ui("auth")), 
   nav_panel_hidden(value = "add_action", add_action_ui("add_action")),
   nav_panel_hidden(value = "update_action", update_action_ui("update_action")), 
@@ -74,14 +76,12 @@ server <- function(input, output, session) {
   
   # Session Timeout Watchdog
   observe({
-    req(current_user()) # Only run this if someone is actually logged in
+    req(current_user()) 
     
-    # Wake this code block up every 60 seconds (60000 milliseconds)
     invalidateLater(60000) 
     
-    # Check if the current time has passed the expiration time
     if (Sys.time() > current_user()$expires_at) {
-      current_user(NULL) # Forcefully erase the user data (logs them out)
+      current_user(NULL) 
       showNotification("Your secure session has expired. Please log in again.", type = "warning", duration = NULL)
     }
   })
@@ -99,7 +99,6 @@ server <- function(input, output, session) {
   db <- connect_supabase()
   onStop(function() { pool::poolClose(db) })
   
-  # 3. Initialize Modules (Pass the trigger to the modules that need it)
   dashboard_server("dashboard", db, db_sync_trigger)
   auth_server("auth", db, current_user) 
   profile_triggers <- profile_server("profile", db, current_user, db_sync_trigger)
@@ -122,7 +121,7 @@ server <- function(input, output, session) {
     }
   })
   
-  # 4. Dynamic Sidebar Highlighting CSS
+  # Dynamic Sidebar Highlighting CSS
   output$nav_styles <- renderUI({
     active_btn <- switch(input$main_nav,
                          "dashboard" = "#nav_dash",
