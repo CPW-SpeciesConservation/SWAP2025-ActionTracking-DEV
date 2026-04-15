@@ -295,8 +295,15 @@ dashboard_server <- function(id, db, db_sync_trigger) {
     })
     
     output$target_actions_table <- renderDT({
-      df <- targ_actions_data(); if(nrow(df) == 0) return(datatable(data.frame(Message = "No targets selected."), rownames = F, options = list(dom = 't')))
-      datatable(df, selection = "single", rownames = F, options = list(pageLength = 5, dom = 'tp', columnDefs = list(list(visible = F, targets = c(0, 1)))))
+      df <- targ_actions_data(); if(nrow(df) == 0) 
+        return(datatable(data.frame(Message = "No targets selected."), 
+                         rownames = F, options = list(dom = 't')))
+      datatable(df, selection = "single", rownames = F, 
+                options = list(dom = 't',
+                               paging= FALSE,
+                               scrollY="250px",
+                               scrollCollapse=TRUE,
+                               columnDefs = list(list(visible = F, targets = c(0, 1)))))
     })
     
     output$targ_threats_ui <- renderUI({
@@ -333,7 +340,12 @@ dashboard_server <- function(id, db, db_sync_trigger) {
     
     output$targ_updates_table <- renderDT({
       df <- targ_updates_raw() %>% arrange(desc(Date)); if(nrow(df) == 0) return(datatable(data.frame(Message="No progress logs."), rownames=F, options=list(dom='t')))
-      datatable(df, selection = 'single', rownames = F, options = list(pageLength = 4, dom = 'tp')) 
+      datatable(df, selection = 'single', rownames = F, options = list(
+        dom = 't',
+        paging = FALSE,          
+        scrollY = "250px",       
+        scrollCollapse = TRUE,   
+        info = FALSE)) 
     })
     
   
@@ -357,7 +369,13 @@ dashboard_server <- function(id, db, db_sync_trigger) {
     
     output$action_targets_table <- renderDT({
       df <- act_targets_data(); if(nrow(df) == 0) return(datatable(data.frame(Message = "No action selected."), rownames = F, options = list(dom = 't')))
-      datatable(df, selection = "single", rownames = F, options = list(pageLength = 5, dom = 'tp', columnDefs = list(list(visible = F, targets = c(0, 1)))))
+      datatable(df, selection = "single", rownames = F, options = list(
+        dom = 't', 
+        paging = FALSE,          
+        scrollY = "250px",      
+        scrollCollapse = TRUE,   
+        info = FALSE,
+        columnDefs = list(list(visible = F, targets = c(0, 1)))))
     })
     
     output$act_threats_ui <- renderUI({
@@ -394,7 +412,12 @@ dashboard_server <- function(id, db, db_sync_trigger) {
     
     output$act_updates_table <- renderDT({
       df <- act_updates_raw() %>% arrange(desc(Date)); if(nrow(df) == 0) return(datatable(data.frame(Message="No progress logs."), rownames=F, options=list(dom='t')))
-      datatable(df, selection = 'single', rownames = F, options = list(pageLength = 4, dom = 'tp'))
+      datatable(df, selection = 'single', rownames = F, options = list(
+        dom = 't',
+        paging = FALSE,          
+        scrollY = "250px",       
+        scrollCollapse = TRUE,   
+        info = FALSE))
     })
     
  
@@ -406,7 +429,13 @@ dashboard_server <- function(id, db, db_sync_trigger) {
     })
     
     output$all_actions_table <- renderDT({
-      datatable(all_actions_data(), selection = "single", rownames = F, options = list(pageLength = 10, dom = 'ftip', columnDefs = list(list(visible = F, targets = 0))))
+      datatable(all_actions_data(), selection = "single", rownames = F, options = list(
+        dom = 'ftip',
+        paging = FALSE,        
+        scrollY = "calc(100vh - 250px)",       
+        scrollCollapse = TRUE,   
+        info = FALSE,
+        columnDefs = list(list(visible = F, targets = 0))))
     })
     
     output$all_act_targets_ui <- renderUI({
