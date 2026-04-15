@@ -224,10 +224,10 @@ dashboard_ui <- function(id) {
                               radioButtons(ns("conn_chart_choice"), "Select Visualization:", 
                                            choices = c("Sankey Chart" = "sankey", 
                                                        "Chord Graph" = "bipartite",
-                                                       "Threats Heatmap" = "heatmap"), 
+                                                       "Heatmap" = "heatmap"), 
                                            inline = TRUE)
                             ),
-                            p(em("Visualize exactly how Conservation Actions flow through specific Targets to mitigate Threats.", class="text-muted small"))
+                            p(em("Visualize exactly how Conservation Actions flow through specific Species/Habitats to mitigate Threats.", class="text-muted small"))
                         )
                     ),
                     div(class = "card shadow-sm",
@@ -285,10 +285,10 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       db_sync_trigger(); is_sp <- input$targ_type == "Species"; tid <- if(is_sp) input$dash_species else input$dash_habitat
       if (is.null(tid) || tid == "") return(data.frame())
       q <- if(is_sp) {
-        "SELECT ia.implementedactionid, sha.specieshabitatactionsid, l2.actionl2name AS \"L2 Action\", COALESCE(sadd.\"Meaningful.Details\", 'None') AS \"Action Detail\", ia.timeframe AS \"Timeframe\", ia.status AS \"Status\" 
+        "SELECT ia.implementedactionid, sha.specieshabitatactionsid, l2.actionl2code || '. ' || l2.actionl2name AS \"Action\", COALESCE(sadd.\"Meaningful.Details\", 'None') AS \"Action Detail\", ia.timeframe AS \"Timeframe\", ia.status AS \"Status\" 
          FROM track.implementedactions ia JOIN track.specieshabitatactions sha ON ia.implementedactionid = sha.implementedactionid JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id LEFT JOIN proj.speciesactionsdetailsdistinct sadd ON sha.speciesactiondetailid = sadd.speciesactionsdetailsdistinctid WHERE sha.speciesid = $1"
       } else {
-        "SELECT ia.implementedactionid, sha.specieshabitatactionsid, l2.actionl2name AS \"L2 Action\", COALESCE(hadd.\"Meaningful.Details\", 'None') AS \"Action Detail\", ia.timeframe AS \"Timeframe\", ia.status AS \"Status\" 
+        "SELECT ia.implementedactionid, sha.specieshabitatactionsid, l2.actionl2code || '. ' || l2.actionl2name AS \"Action\", COALESCE(hadd.\"Meaningful.Details\", 'None') AS \"Action Detail\", ia.timeframe AS \"Timeframe\", ia.status AS \"Status\" 
          FROM track.implementedactions ia JOIN track.specieshabitatactions sha ON ia.implementedactionid = sha.implementedactionid JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id LEFT JOIN proj.habitatactionsdetailsdistinct hadd ON sha.habitatactiondetailid = hadd.habitatactionsdetailsdistinctid WHERE sha.habitatsubtypeid = $1"
       }
       dbGetQuery(db, q, params = list(as.integer(tid)))
@@ -296,7 +296,7 @@ dashboard_server <- function(id, db, db_sync_trigger) {
     
     output$target_actions_table <- renderDT({
       df <- targ_actions_data(); if(nrow(df) == 0) 
-        return(datatable(data.frame(Message = "No targets selected."), 
+        return(datatable(data.frame(Message = "No species/habitats selected."), 
                          rownames = F, options = list(dom = 't')))
       datatable(df, selection = "single", rownames = F, 
                 options = list(dom = 't',
@@ -362,36 +362,88 @@ dashboard_server <- function(id, db, db_sync_trigger) {
     })
     
     act_targets_data <- reactive({
-      db_sync_trigger(); if (is.null(input$dash_l2) || input$dash_l2 == "") return(data.frame())
-      q <- "SELECT ia.implementedactionid, sha.specieshabitatactionsid, CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS \"Target Name\", CASE WHEN sha.specieshabitat = TRUE THEN 'Species' ELSE 'Habitat' END AS \"Type\", l2.actionl2name AS \"L2 Action\", COALESCE(sadd.\"Meaningful.Details\", hadd.\"Meaningful.Details\", 'None') AS \"Action Detail\", ia.status AS \"Status\", ia.timeframe AS \"Timeframe\" FROM track.implementedactions ia JOIN track.specieshabitatactions sha ON ia.implementedactionid = sha.implementedactionid JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id LEFT JOIN proj.species s ON sha.speciesid = s.speciesid LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid LEFT JOIN proj.speciesactionsdetailsdistinct sadd ON sha.speciesactiondetailid = sadd.speciesactionsdetailsdistinctid LEFT JOIN proj.habitatactionsdetailsdistinct hadd ON sha.habitatactiondetailid = hadd.habitatactionsdetailsdistinctid WHERE ia.actionl2id = $1"
+      db_sync_trigger()
+      if (is.null(input$dash_l2) || input$dash_l2 == "") return(data.frame())
+      
+      q <- "SELECT 
+              ia.implementedactionid, 
+              l2.actionl2code || '. ' || l2.actionl2name AS \"Action\", 
+              ia.status AS \"Status\", 
+              ia.timeframe AS \"Timeframe\",
+              STRING_AGG(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END, ', ') AS \"Included Targets\"
+            FROM track.implementedactions ia 
+            JOIN track.specieshabitatactions sha ON ia.implementedactionid = sha.implementedactionid 
+            JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id 
+            LEFT JOIN proj.species s ON sha.speciesid = s.speciesid 
+            LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid 
+            WHERE ia.actionl2id = $1
+            GROUP BY ia.implementedactionid, l2.actionl2code, l2.actionl2name, ia.status, ia.timeframe
+            ORDER BY ia.implementedactionid DESC"
+      
       dbGetQuery(db, q, params = list(as.integer(input$dash_l2)))
     })
     
     output$action_targets_table <- renderDT({
-      df <- act_targets_data(); if(nrow(df) == 0) return(datatable(data.frame(Message = "No action selected."), rownames = F, options = list(dom = 't')))
+      df <- act_targets_data()
+      if(nrow(df) == 0) return(datatable(data.frame(Message = "No action selected."), rownames = F, options = list(dom = 't')))
+      
       datatable(df, selection = "single", rownames = F, options = list(
-        dom = 't', 
+        dom = 'ft', 
         paging = FALSE,          
         scrollY = "250px",      
         scrollCollapse = TRUE,   
         info = FALSE,
-        columnDefs = list(list(visible = F, targets = c(0, 1)))))
+        columnDefs = list(list(visible = F, targets = 0))))
     })
     
     output$act_threats_ui <- renderUI({
-      req(input$action_targets_table_rows_selected); sha_id <- act_targets_data()[input$action_targets_table_rows_selected, "specieshabitatactionsid"]
-      q <- "SELECT l2.threatl2code || '. ' || l2.threatl2name AS t_name, ta.justification FROM track.threatsaddressed ta JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id WHERE sha.specieshabitatactionsid = $1"
-      threats <- dbGetQuery(db, q, params = list(as.integer(sha_id)))
+      req(input$action_targets_table_rows_selected)
+      impl_id <- act_targets_data()[input$action_targets_table_rows_selected, "implementedactionid"]
+      q <- "SELECT 
+              l2.threatl2code || '. ' || l2.threatl2name AS t_name, 
+              ta.justification,
+              CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_label
+            FROM track.threatsaddressed ta 
+            JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid 
+            JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id 
+            LEFT JOIN proj.species s ON sha.speciesid = s.speciesid
+            LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid
+            WHERE sha.implementedactionid = $1
+            ORDER BY target_label ASC, t_name ASC"
+      
+      threats <- dbGetQuery(db, q, params = list(as.integer(impl_id)))
       if(nrow(threats) == 0) return(p("No threats recorded."))
-      tags$ul(class = "ps-3 mb-0", lapply(1:nrow(threats), function(i) tags$li(strong(threats$t_name[i]), br(), em(threats$justification[i]), class="mb-3")))
+      
+      tags$ul(class = "ps-3 mb-0", lapply(1:nrow(threats), function(i) {
+        tags$li(
+          strong(threats$t_name[i]), 
+          span(style="color: #0D67B8; font-size: 0.9em; font-weight: bold;", paste0(" [", threats$target_label[i], "]")),
+          br(), 
+          em(threats$justification[i]), 
+          class="mb-3"
+        )
+      }))
     })
     
     output$act_other_targets_ui <- renderUI({
-      req(input$action_targets_table_rows_selected); impl_id <- act_targets_data()[input$action_targets_table_rows_selected, "implementedactionid"]; sha_id <- act_targets_data()[input$action_targets_table_rows_selected, "specieshabitatactionsid"]
-      q <- "SELECT CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_name, CASE WHEN sha.specieshabitat = TRUE THEN 'Species' ELSE 'Habitat' END AS target_type FROM track.specieshabitatactions sha LEFT JOIN proj.species s ON sha.speciesid = s.speciesid LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid WHERE sha.implementedactionid = $1 AND sha.specieshabitatactionsid != $2"
-      others <- dbGetQuery(db, q, params = list(as.integer(impl_id), as.integer(sha_id)))
-      if(nrow(others) == 0) return(p("No other targets for this action."))
-      tags$ul(class = "ps-3 mb-0", lapply(1:nrow(others), function(i) tags$li(strong(others$target_name[i]), " (", others$target_type[i], ")")))
+      req(input$action_targets_table_rows_selected)
+      impl_id <- act_targets_data()[input$action_targets_table_rows_selected, "implementedactionid"]
+      
+      q <- "SELECT 
+              CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_name, 
+              CASE WHEN sha.specieshabitat = TRUE THEN 'Species' ELSE 'Habitat' END AS target_type 
+            FROM track.specieshabitatactions sha 
+            LEFT JOIN proj.species s ON sha.speciesid = s.speciesid 
+            LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid 
+            WHERE sha.implementedactionid = $1
+            ORDER BY target_type DESC, target_name ASC"
+      
+      others <- dbGetQuery(db, q, params = list(as.integer(impl_id)))
+      if(nrow(others) == 0) return(p("No species/habitats assigned."))
+      
+      tags$ul(class = "ps-3 mb-0", lapply(1:nrow(others), function(i) {
+        tags$li(strong(others$target_name[i]), " (", others$target_type[i], ")")
+      }))
     })
     
     act_updates_raw <- reactive({
@@ -442,7 +494,7 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       req(input$all_actions_table_rows_selected); impl_id <- all_actions_data()[input$all_actions_table_rows_selected, "implementedactionid"]
       q <- "SELECT CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_name, CASE WHEN sha.specieshabitat = TRUE THEN 'Species' ELSE 'Habitat' END AS target_type, COALESCE(sadd.\"Meaningful.Details\", hadd.\"Meaningful.Details\", 'None') AS detail_text FROM track.specieshabitatactions sha LEFT JOIN proj.species s ON sha.speciesid = s.speciesid LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid LEFT JOIN proj.speciesactionsdetailsdistinct sadd ON sha.speciesactiondetailid = sadd.speciesactionsdetailsdistinctid LEFT JOIN proj.habitatactionsdetailsdistinct hadd ON sha.habitatactiondetailid = hadd.habitatactionsdetailsdistinctid WHERE sha.implementedactionid = $1"
       res <- dbGetQuery(db, q, params = list(as.integer(impl_id)))
-      if(nrow(res) == 0) return(p("No targets mapped."))
+      if(nrow(res) == 0) return(p("No species/habitats mapped."))
       tags$ul(class = "ps-3 mb-0", lapply(1:nrow(res), function(i) tags$li(strong(res$target_name[i]), " (", res$target_type[i], ")", br(), em("Detail: ", res$detail_text[i]), class = "mb-2")))
     })
     
@@ -554,7 +606,7 @@ dashboard_server <- function(id, db, db_sync_trigger) {
         font = list(size = 12), margin = list(t = 60, b = 20, l = 20, r = 20),
         annotations = list(
           list(x = 0, y = 1.05, text = "<b>Actions</b>", showarrow = FALSE, xref = "paper", yref = "paper", xanchor = "left", font = list(size = 16)),
-          list(x = 0.5, y = 1.05, text = "<b>Targets</b>", showarrow = FALSE, xref = "paper", yref = "paper", xanchor = "center", font = list(size = 16)),
+          list(x = 0.5, y = 1.05, text = "<b>Species/Habitats</b>", showarrow = FALSE, xref = "paper", yref = "paper", xanchor = "center", font = list(size = 16)),
           list(x = 1, y = 1.05, text = "<b>Mitigated Threats</b>", showarrow = FALSE, xref = "paper", yref = "paper", xanchor = "right", font = list(size = 16))
         )
       ) %>% config(displayModeBar = FALSE)
@@ -745,10 +797,10 @@ dashboard_server <- function(id, db, db_sync_trigger) {
             logs <- actual_counts$total_logs[match_idx]
             t_list <- paste(strwrap(actual_counts$target_list[match_idx], width = 45), collapse = "<br>")
             z_main[r, c] <- val
-            text_main[r, c] <- paste0("<b>Action:</b> ", y_axis_df$l2c[r], " - ", y_axis_df$l2n[r], "<br><br><b>Threat:</b> ", x_axis_df$l2c[c], " - ", x_axis_df$l2n[c], "<br><br><b>Total Implementation Logs:</b> ", logs, "<br><b>Distinct Targets:</b> ", val, "<br><b>Targets Addressed:</b><br><i>", t_list, "</i>")
+            text_main[r, c] <- paste0("<b>Action:</b> ", y_axis_df$l2c[r], " - ", y_axis_df$l2n[r], "<br><br><b>Threat:</b> ", x_axis_df$l2c[c], " - ", x_axis_df$l2n[c], "<br><br><b>Total Actions/Threats Combo Loged:</b> ", logs, "<br><b>Distinct Species/Habitats:</b> ", val, "<br><b>Species/Habitats Addressed:</b><br><i>", t_list, "</i>")
           } else {
             z_main[r, c] <- 0
-            text_main[r, c] <- paste0("<b>Action:</b> ", y_axis_df$l2c[r], " - ", y_axis_df$l2n[r], "<br><b>Threat:</b> ", x_axis_df$l2c[c], " - ", x_axis_df$l2n[c], "<br><br>No Targets Addressed")
+            text_main[r, c] <- paste0("<b>Action:</b> ", y_axis_df$l2c[r], " - ", y_axis_df$l2n[r], "<br><b>Threat:</b> ", x_axis_df$l2c[c], " - ", x_axis_df$l2n[c], "<br><br>No Species/Habitats Addressed")
           }
         }
       }
@@ -765,8 +817,8 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       z_left <- cbind(y_axis_df$l0_z, y_axis_df$l1_z)
       z_bottom <- rbind(x_axis_df$l0_z, x_axis_df$l1_z)
       
-      hover_left <- cbind(paste("L0 Action:", y_axis_df$l0), paste("L1 Action:", y_axis_df$l1))
-      hover_bottom <- rbind(paste("L0 Threat:", x_axis_df$l0), paste("L1 Threat:", x_axis_df$l1))
+      hover_left <- cbind(paste("Level 0 Action:", y_axis_df$l0), paste("Level 1 Action:", y_axis_df$l1))
+      hover_bottom <- rbind(paste("Level 0 Threat:", x_axis_df$l0), paste("Level 1 Threat:", x_axis_df$l1))
       
       # 4. Custom Scales
       cpw_main_scale <- list(
@@ -785,8 +837,8 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       ann_list <- list()
       
       # THE FIX: Decoupled Main Axis Titles safely tucked within the expanded margins
-      ann_list[[length(ann_list)+1]] <- list(xref="paper", yref="paper", x=0.56, y=-0.8, text="<b>Threats (L2 Code)</b>", showarrow=FALSE, font=list(size=14, color="black"))
-      ann_list[[length(ann_list)+1]] <- list(xref="paper", yref="paper", x=-0.08, y=0.56, text="<b>Actions (L2 Code)</b>", textangle=-90, showarrow=FALSE, font=list(size=14, color="black"))
+      ann_list[[length(ann_list)+1]] <- list(xref="paper", yref="paper", x=0.56, y=-0.8, text="<b>Level 2 Threats</b>", showarrow=FALSE, font=list(size=14, color="black"))
+      ann_list[[length(ann_list)+1]] <- list(xref="paper", yref="paper", x=-0.08, y=0.56, text="<b>Level 2 Actions</b>", textangle=-90, showarrow=FALSE, font=list(size=14, color="black"))
       
       l0_blocks <- y_axis_df %>% mutate(idx = row_number() - 1) %>% group_by(l0) %>% summarize(mid = mean(idx), .groups="drop")
       for(i in 1:nrow(l0_blocks)) { ann_list[[length(ann_list)+1]] <- list(xref="x2", yref="y2", x=0, y=l0_blocks$mid[i], text=paste0("<b>", helper_wrap(l0_blocks$l0[i], 12), "</b>"), textangle=-90, showarrow=FALSE, font=list(size=10, color="black")) }
@@ -806,7 +858,7 @@ dashboard_server <- function(id, db, db_sync_trigger) {
           type = "heatmap", x = x_axis_df$l2c_factor, y = y_axis_df$l2c_factor, z = z_main, text = text_main,
           hoverinfo = "text", colorscale = cpw_main_scale, xaxis = "x", yaxis = "y",
           xgap = 1, ygap = 1,
-          colorbar = list(title="<b>Distinct<br>Targets</b>", x=1.02, y=0.5, yanchor="middle", len=0.6, dtick=1) 
+          colorbar = list(title="<b>Distinct<br>Species/Habitats</b>", x=1.02, y=0.5, yanchor="middle", len=0.6, dtick=1) 
         ) %>%
         add_trace(
           type = "heatmap", x = c("L0 Action", "L1 Action"), y = y_axis_df$l2c_factor, z = z_left, text = hover_left,

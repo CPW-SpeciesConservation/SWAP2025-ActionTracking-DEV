@@ -24,24 +24,33 @@ admin_ui_users <- function(id) {
 admin_ui_actions <- function(id) {
   ns <- NS(id)
   tagList(
-    div(class = "card shadow-sm mb-4 mt-3",
-        div(class = "card-header text-white fw-bold", style = "background-color: #005A53;", "Global Action Directory"),
-        div(class = "card-body",
-            layout_columns(
-              p("Select an action to view details and manage delegates."),
-              selectInput(ns("filter_type"), "Filter by Target Type:", choices = c("All", "Species", "Habitat"), width = "100%")
-            ),
-            DTOutput(ns("actions_table"))
-        )
-    ),
-    conditionalPanel(
-      condition = sprintf("input['%s'] != null", ns("actions_table_rows_selected")),
-      div(class = "card shadow-sm mb-5", style = "border-color: #005A53;",
-          div(class = "card-header text-white", style = "background-color: #005A53;", "Action Intelligence & Delegation"),
-          div(class = "card-body",
-              uiOutput(ns("admin_action_details_view"))
-          )
-      )
+    fluidRow(class = "mt-4",
+             
+             column(5, 
+                    div(class = "card shadow-sm mb-4",
+                        div(class = "card-header text-white fw-bold", style = "background-color: #005A53;", "Global Action Directory"),
+                        div(class = "card-body",
+                            layout_columns(
+                              selectInput(ns("filter_type"), "Filter by Target Type:", choices = c("All", "Species", "Habitat"), width = "100%")
+                            ),
+                            p("Select an action to view details and manage delegates.", class = "text-muted small"),
+                            DTOutput(ns("actions_table"))
+                        )
+                    )
+             ),
+             
+             column(7,
+                    conditionalPanel(
+                      condition = sprintf("input['%s'] != null", ns("actions_table_rows_selected")),
+                      div(class = "card shadow-sm mb-5", style = "border-color: #0D67B8;",
+                          div(class = "card-header text-white fw-bold", style = "background-color: #0D67B8;", "Action Intelligence & Delegation"),
+                          div(class = "card-body",
+                              uiOutput(ns("admin_action_details_view"))
+                          )
+                      )
+                    )
+             )
+             
     )
   )
 }
@@ -50,35 +59,43 @@ admin_server <- function(id, db, current_user, db_sync_trigger) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     
-    # --- USER LOGIC ---
     all_users <- reactive({ db_sync_trigger(); dbGetQuery(db, "SELECT id, first_name || ' ' || last_name AS name, email, agency, role FROM public.profiles ORDER BY name") })
-    output$users_table <- renderDT({ datatable(all_users(), selection = "single", rownames = FALSE, options = list(pageLength = 5, dom = 'ftp', columnDefs = list(list(visible = FALSE, targets = 0)))) })
+    output$users_table <- renderDT({ datatable(all_users(), selection = "single", rownames = FALSE, options = list(
+      dom = 'ft',   paging = FALSE,          
+      scrollY = "250px",       
+      scrollCollapse = TRUE,
+      columnDefs = list(list(visible = FALSE, targets = 0)))) })
+    
     output$selected_user_info <- renderUI({ req(input$users_table_rows_selected); user_row <- all_users()[input$users_table_rows_selected, ]; tagList(p(strong("User: "), user_row$name, br(), strong("Email: "), user_row$email)) })
     observeEvent(input$btn_save_role, { req(input$users_table_rows_selected); user_row <- all_users()[input$users_table_rows_selected, ]; dbExecute(db, "UPDATE public.profiles SET role = $1 WHERE id = $2", params = list(input$new_role, user_row$id)); showNotification("Role updated!", type = "message"); refresh_trigger(db_sync_trigger() + 1) })
     
-    # --- ACTION DELEGATION LOGIC ---
+    # Action Delegation
     all_actions <- reactive({
       db_sync_trigger()
       query <- "
         SELECT 
           ia.implementedactionid AS \"ID\",
-          l2.actionl2name AS \"Action Name\",
+          l2.actionl2code || '. ' || l2.actionl2name AS \"Action\",
           ia.actiondesc AS \"User Description\",
           COALESCE(p.first_name || ' ' || p.last_name, 'No Author Recorded') AS \"Created By\",
-          CASE WHEN sha.specieshabitat = TRUE THEN 'Species' ELSE 'Habitat' END AS \"Type\"
+          CASE WHEN sha.specieshabitat = TRUE THEN 'Species' ELSE 'Habitat' END AS \"Target\"
         FROM track.implementedactions ia
         LEFT JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id
         LEFT JOIN public.profiles p ON ia.createdby = p.id::text
         LEFT JOIN track.specieshabitatactions sha ON ia.implementedactionid = sha.implementedactionid
       "
       df <- dbGetQuery(db, query)
-      if (input$filter_type != "All") df <- df[df$Type == input$filter_type, ]
+      
+      if (input$filter_type != "All") df <- df[df$"Target" == input$filter_type, ]
+      
       df
     })
     
     output$actions_table <- renderDT({
       datatable(all_actions(), selection = "single", rownames = FALSE,
-                options = list(pageLength = 5, dom = 'ftp', 
+                options = list(dom = 'ft', 
+                               paging = FALSE,          
+                               scrollY = "500px",     
                                columnDefs = list(list(className = 'dt-left', targets = 0))))
     })
     
@@ -87,7 +104,7 @@ admin_server <- function(id, db, current_user, db_sync_trigger) {
       action_row <- all_actions()[input$actions_table_rows_selected, ]
       impl_id <- action_row$ID
       
-      # 1. Fetch Collaborators
+      # Fetch Collaborators
       q_collabs <- "
         SELECT p.first_name || ' ' || p.last_name AS name, 'Creator' AS access_level
         FROM track.implementedactions a JOIN public.profiles p ON a.createdby = p.id::text WHERE a.implementedactionid = $1
@@ -97,7 +114,7 @@ admin_server <- function(id, db, current_user, db_sync_trigger) {
       "
       collabs_df <- dbGetQuery(db, q_collabs, params = list(as.integer(impl_id)))
       
-      # 2. Fetch Linked Targets (Species/Habitats)
+      # Fetch Linked Species/Habitats
       q_targets <- "
         SELECT CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_name
         FROM track.specieshabitatactions sha
@@ -107,7 +124,7 @@ admin_server <- function(id, db, current_user, db_sync_trigger) {
       "
       targets_df <- dbGetQuery(db, q_targets, params = list(as.integer(impl_id)))
       
-      # 3. Available Users for Delegation
+      # Available Users for Delegation
       q_avail <- "SELECT id, first_name || ' ' || last_name AS name FROM public.profiles WHERE id::text NOT IN 
                   (SELECT COALESCE(createdby, '') FROM track.implementedactions WHERE implementedactionid = $1 UNION SELECT userid FROM track.delegateusers WHERE implementedactionid = $1) ORDER BY name"
       avail_df <- dbGetQuery(db, q_avail, params = list(as.integer(impl_id)))
@@ -116,16 +133,16 @@ admin_server <- function(id, db, current_user, db_sync_trigger) {
       tagList(
         layout_columns(
           div(h6("Action Overview", class="text-muted"), 
-              p(strong("ID: "), impl_id, br(), strong("Name: "), action_row$`Action Name`),
-              p(strong("Targets: "), paste(targets_df$target_name, collapse = ", "))),
+              p(strong("ID: "), impl_id, br(), strong("Action: "), action_row$`Action`),
+              p(strong("Species/Habitats: "), paste(targets_df$target_name, collapse = ", "))),
           div(h6("Current Access", class="text-muted"), 
               tags$ul(lapply(1:nrow(collabs_df), function(i) tags$li(collabs_df$name[i], " (", collabs_df$access_level[i], ")"))))
         ),
         hr(),
-        h6("Assign New Delegate", class="fw-bold text-muted"),
+        h6("Select User", class="fw-bold text-muted"),
         layout_columns(
           selectInput(ns("new_delegate_id"), NULL, choices = c("Choose a user..." = "", user_choices)),
-          actionButton(ns("btn_add_delegate"), "Assign to Action", class = "btn-success w-100")
+          actionButton(ns("btn_add_delegate"), "Delegate to Action", class = "btn-success w-100")
         )
       )
     })

@@ -23,7 +23,7 @@ auth_ui <- function(id) {
     
     div(class = "container mt-5", style = "max-width: 450px;",
         div(class = "card shadow-sm",
-            div(class = "card-header text-white text-center fw-bold", style = "background-color: #07234C;", "CPW User Authentication"),
+            div(class = "card-header text-white text-center fw-bold", style = "background-color: #07234C;", "User Authentication"),
             div(class = "card-body",
                 
                 navset_underline(
@@ -40,8 +40,8 @@ auth_ui <- function(id) {
                                 textInput(ns("reg_fname"), "First Name *", width = "100%"),
                                 textInput(ns("reg_lname"), "Last Name *", width = "100%"),
                                 selectInput(ns("reg_agency"), "Agency *", choices = c("Loading..." = ""), width = "100%"),
-                                textInput(ns("reg_job"), "Job Title (Optional)", width = "100%"),
-                                textInput(ns("reg_phone"), "Phone Number (Optional)", width = "100%"),
+                                textInput(ns("reg_job"), "Job Title", width = "100%"),
+                                textInput(ns("reg_phone"), "Phone Number", width = "100%"),
                                 hr(),
                                 textInput(ns("reg_email"), "Email Address *", width = "100%"),
                                 passwordInput(ns("reg_pwd"), "Password *", width = "100%"),
@@ -76,7 +76,6 @@ auth_server <- function(id, db, current_user) {
     }
     
     observeEvent(input$btn_register, {
-      # Job and Phone are NOT in the mandatory check anymore
       if (trimws(input$reg_fname) == "" || trimws(input$reg_lname) == "" || input$reg_agency == "" || trimws(input$reg_email) == "" || trimws(input$reg_pwd) == "") {
         output$auth_msg <- renderText("Error: First Name, Last Name, Agency, Email, and Password are ALL mandatory.")
         return() 
@@ -92,7 +91,6 @@ auth_server <- function(id, db, current_user) {
         new_uuid <- if (!is.null(res[["user"]]) && !is.null(res[["user"]][["id"]])) res[["user"]][["id"]] else res[["id"]]
         
         if (!is.null(new_uuid)) {
-          # UPDATED QUERY: Now saves Job, Phone, and Email!
           q_upsert <- "
             INSERT INTO public.profiles (id, first_name, last_name, agency, email, job_title, phone) 
             VALUES ($1, $2, $3, $4, $5, $6, $7) 
@@ -102,7 +100,7 @@ auth_server <- function(id, db, current_user) {
                 job_title = EXCLUDED.job_title, phone = EXCLUDED.phone
           "
           dbExecute(db, q_upsert, params = list(new_uuid, input$reg_fname, input$reg_lname, input$reg_agency, input$reg_email, input$reg_job, input$reg_phone))
-          output$auth_msg <- renderText("Account created! Please switch to the Sign In tab.")
+          output$auth_msg <- renderText("Account created! Use the Sign in tab to sign in.")
         } else {
           output$auth_msg <- renderText("Error: Account created, but failed to retrieve user ID.")
         }
