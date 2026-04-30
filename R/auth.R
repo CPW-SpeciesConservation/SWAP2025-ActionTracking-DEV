@@ -1,5 +1,7 @@
 library(httr)
 library(jsonlite)
+library(shiny)
+library(bslib)
 
 auth_ui <- function(id) {
   ns <- NS(id)
@@ -11,14 +13,32 @@ auth_ui <- function(id) {
           if(e.keyCode === 13){ e.preventDefault(); $('#%3$s').click(); }
         });
         
-        // Enter key for Register (Includes new optional fields)
+        // Enter key for Register
         $('#%4$s, #%5$s, #%6$s, #%7$s, #%8$s, #%9$s, #%10$s').on('keypress', function(e){
           if(e.keyCode === 13){ e.preventDefault(); $('#%11$s').click(); }
         });
       });
+
+      // THE FIX: Wait until Shiny is completely connected before looking for the token!
+      $(document).on('shiny:connected', function() {
+        var hash = window.location.hash;
+        if (hash && hash.includes('type=recovery')) {
+          // Supabase uses standard query string formatting after the hash
+          var params = new URLSearchParams(hash.substring(1));
+          var token = params.get('access_token');
+          
+          if (token) {
+            // Now Shiny is actually listening!
+            Shiny.setInputValue('%12$s', token);
+            // Erase the token from the browser URL bar
+            history.replaceState(null, null, ' '); 
+          }
+        }
+      });
     ", 
                              ns("login_email"), ns("login_pwd"), ns("btn_login"),
-                             ns("reg_fname"), ns("reg_lname"), ns("reg_agency"), ns("reg_job"), ns("reg_phone"), ns("reg_email"), ns("reg_pwd"), ns("btn_register")
+                             ns("reg_fname"), ns("reg_lname"), ns("reg_agency"), ns("reg_job"), ns("reg_phone"), ns("reg_email"), ns("reg_pwd"), ns("btn_register"),
+                             ns("recovery_token")
     ))),
     
     div(class = "container mt-5", style = "max-width: 450px;",
@@ -32,7 +52,12 @@ auth_ui <- function(id) {
                             div(class = "mt-3",
                                 textInput(ns("login_email"), "Email Address", width = "100%"),
                                 passwordInput(ns("login_pwd"), "Password", width = "100%"),
-                                actionButton(ns("btn_login"), "Secure Log In", class = "btn-primary w-100 mt-2", style = "font-weight: 900;")
+                                actionButton(ns("btn_login"), "Secure Log In", class = "btn-primary w-100 mt-2", style = "font-weight: 900;"),
+                                
+                                # THE FIX: Added Forgot Password Link
+                                div(class = "text-center mt-3",
+                                    actionLink(ns("lnk_forgot_pwd"), "Forgot email or password?", style = "color: #0D67B8; text-decoration: underline;")
+                                )
                             )
                   ),
                   nav_panel("Register",
@@ -66,14 +91,63 @@ auth_server <- function(id, db, current_user) {
       updateSelectInput(session, "reg_agency", choices = c("Choose an agency..." = "", agencies$agencyname))
     })
     
-    supa_auth <- function(email, password, type = "login") {
+    # THE FIX: Expanded supa_auth to handle the "recover" endpoint and made password optional
+    supa_auth <- function(email, password = NULL, type = "login") {
       base_url <- Sys.getenv("SUPABASE_URL")
       api_key <- Sys.getenv("SUPABASE_ANON_KEY")
-      endpoint <- if(type == "login") "/auth/v1/token?grant_type=password" else "/auth/v1/signup"
+      
+      if (type == "login") {
+        endpoint <- "/auth/v1/token?grant_type=password"
+        body_data <- list(email = email, password = password)
+      } else if (type == "signup") {
+        endpoint <- "/auth/v1/signup"
+        body_data <- list(email = email, password = password)
+      } else if (type == "recover") {
+        endpoint <- "/auth/v1/recover"
+        body_data <- list(email = email)
+      }
+      
       url <- paste0(base_url, endpoint)
-      res <- POST(url, add_headers(apikey = api_key, `Content-Type` = "application/json"), body = toJSON(list(email = email, password = password), auto_unbox = TRUE))
+      res <- POST(url, add_headers(apikey = api_key, `Content-Type` = "application/json"), body = toJSON(body_data, auto_unbox = TRUE))
       return(content(res))
     }
+    
+    # THE FIX: Show Modal when "Forgot Password" is clicked
+    observeEvent(input$lnk_forgot_pwd, {
+      showModal(modalDialog(
+        title = "Reset Password",
+        p("Enter your email address below. If we find an account matching that email, we will send you a secure password reset link."),
+        textInput(session$ns("reset_email"), "Email Address", width = "100%"),
+        footer = tagList(
+          tagAppendAttributes(modalButton("Cancel"), style = "color: #333; background-color: #e9ecef; border-color: #ccc;"),
+          actionButton(session$ns("btn_send_reset"), "Send Reset Link", class = "btn-primary", style = "font-weight: bold;")
+        )
+      ))
+    })
+    
+    # THE FIX: Process the Password Reset Request
+    observeEvent(input$btn_send_reset, {
+      req(input$reset_email)
+      reset_em <- trimws(input$reset_email)
+      
+      if (reset_em == "") {
+        showNotification("Please enter an email address.", type = "warning")
+        return()
+      }
+      
+      # Step 1: Check Database first to ensure it's a valid registered user
+      user_check <- dbGetQuery(db, "SELECT email FROM public.profiles WHERE LOWER(email) = LOWER($1)", params = list(reset_em))
+      
+      # Step 2: If they exist, ping Supabase to trigger the email
+      if (nrow(user_check) > 0) {
+        supa_auth(email = reset_em, type = "recover")
+      }
+      
+      # Security Best Practice: Always show the same success message so malicious users can't "guess" emails by seeing different errors
+      removeModal()
+      showNotification("If that email matches an account in our system, a password reset link has been sent.", type = "message", duration = 8)
+    })
+    
     
     observeEvent(input$btn_register, {
       if (trimws(input$reg_fname) == "" || trimws(input$reg_lname) == "" || input$reg_agency == "" || trimws(input$reg_email) == "" || trimws(input$reg_pwd) == "") {
@@ -104,6 +178,42 @@ auth_server <- function(id, db, current_user) {
         } else {
           output$auth_msg <- renderText("Error: Account created, but failed to retrieve user ID.")
         }
+      }
+    })
+    #  Pop up the new password box when the URL token is detected
+    observeEvent(input$recovery_token, {
+      showModal(modalDialog(
+        title = "Create New Password",
+        p("Welcome back! Please enter your new password below."),
+        passwordInput(session$ns("new_pwd"), "New Password", width = "100%"),
+        footer = tagList(
+          actionButton(session$ns("btn_save_pwd"), "Save Password", class = "btn-success", style = "font-weight: bold;")
+        )
+      ))
+    })
+    
+   #Securely send the new password to the Supabase Database
+    observeEvent(input$btn_save_pwd, {
+      req(input$new_pwd)
+      
+      base_url <- Sys.getenv("SUPABASE_URL")
+      api_key <- Sys.getenv("SUPABASE_ANON_KEY")
+      url <- paste0(base_url, "/auth/v1/user")
+      
+      # We use the temporary token from the URL to authorize the password change
+      res <- httr::PUT(url, 
+                       add_headers(apikey = api_key, 
+                                   Authorization = paste("Bearer", input$recovery_token),
+                                   `Content-Type` = "application/json"),
+                       body = toJSON(list(password = input$new_pwd), auto_unbox = TRUE))
+      
+      status <- status_code(res)
+      
+      if (status == 200) {
+        removeModal()
+        showNotification("Password updated successfully! You may now sign in.", type = "message", duration = 8)
+      } else {
+        showNotification("Failed to update password. Your reset link may have expired.", type = "error")
       }
     })
     
