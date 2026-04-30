@@ -22,6 +22,7 @@ source("R/add_action.R")
 source("R/update_action.R")
 source("R/auth.R")
 source("R/admin.R")
+source("R/add_resource.R")
 
 # Cleaned up theme! We removed the inline bs_add_rules because your custom_styles.css handles it now.
 cpw_theme <- bs_theme(
@@ -60,14 +61,18 @@ ui <- page_navbar(
     open = "closed", 
     title = p("Menu", style = "font-weight: bold; color: #07234C; font-size: 1.2rem; margin-bottom: 15px; border-bottom: 2px solid #ECE8E4; padding-bottom: 10px;"),
     bg = "#FAFAFA",
- 
+    
     uiOutput("dynamic_sidebar")
   ),
   
-  nav_panel_hidden( value = "dashboard", dashboard_ui("dashboard")),
+  nav_panel_hidden(value = "dashboard", dashboard_ui("dashboard")),
   nav_panel_hidden(value = "login", auth_ui("auth")), 
   nav_panel_hidden(value = "add_action", add_action_ui("add_action")),
-  nav_panel_hidden(value = "update_action", update_action_ui("update_action")), 
+  nav_panel_hidden(value = "update_action", update_action_ui("update_action")),
+  
+  # THE FIX: Proper bslib hidden nav panel for the new module
+  nav_panel_hidden(value = "add_resource", add_resource_ui("add_resource")),
+  
   nav_panel_hidden(value = "profile", profile_ui("profile"))
 )
 
@@ -105,6 +110,9 @@ server <- function(input, output, session) {
   add_triggers <- add_action_server("add_action", db, current_user, db_sync_trigger)
   update_action_server("update_action", db, current_user, db_sync_trigger)
   
+  # THE FIX: Added the server call for the new module
+  add_resource_server("add_resource", db, current_user)
+  
   output$dynamic_sidebar <- renderUI({
     if (is.null(current_user())) {
       tagList(
@@ -116,6 +124,8 @@ server <- function(input, output, session) {
         actionButton("nav_dash", "Dashboard", class = "sidebar-btn"),
         actionButton("nav_add", "Report New Action", class = "sidebar-btn"),
         actionButton("nav_update", "Update Existing Action", class = "sidebar-btn"),
+        # THE FIX: Added the new sidebar button for authenticated users
+        actionButton("nav_add_resource", "Add Resources", class = "sidebar-btn"),
         actionButton("nav_profile", "My Profile", class = "sidebar-btn")
       )
     }
@@ -128,6 +138,7 @@ server <- function(input, output, session) {
                          "login"="#nav_login",
                          "add_action" = "#nav_add",
                          "update_action" = "#nav_update",
+                         "add_resource" = "#nav_add_resource", # THE FIX: Ensure the new button gets highlighted
                          "profile" = "#nav_profile"
     )
     
@@ -168,6 +179,12 @@ server <- function(input, output, session) {
   observeEvent(input$nav_update, {
     req(current_user())
     nav_select("main_nav", "update_action")
+  })
+  
+  # THE FIX: Added navigation logic for the new button
+  observeEvent(input$nav_add_resource, {
+    req(current_user())
+    nav_select("main_nav", "add_resource")
   })
   
   observeEvent(input$nav_profile, {

@@ -174,7 +174,7 @@ auth_server <- function(id, db, current_user) {
                 job_title = EXCLUDED.job_title, phone = EXCLUDED.phone
           "
           dbExecute(db, q_upsert, params = list(new_uuid, input$reg_fname, input$reg_lname, input$reg_agency, input$reg_email, input$reg_job, input$reg_phone))
-          output$auth_msg <- renderText("Account created! Use the Sign in tab to sign in.")
+          output$auth_msg <- renderText("Account created! Please check your email to confirm your information and sign in.")
         } else {
           output$auth_msg <- renderText("Error: Account created, but failed to retrieve user ID.")
         }
