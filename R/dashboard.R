@@ -89,11 +89,11 @@ dashboard_ui <- function(id) {
                            fluidRow( 
                              column(width = 7,
                                     div(class = "card shadow-sm",
-                                        div(class = "card-header text-white fw-bold", style = "background-color: #055A53;", "Progress Updates"),
+                                        div(class = "card-header text-white fw-bold", style = "background-color: #07234C;", "Progress Updates"),
                                         div(class = "card-body", 
                                             uiOutput(ns("targ_results_chain_ui")),
                                             hr(),
-                                            DTOutput(ns("targ_updates_table"))
+                                            uiOutput(ns("targ_updates_list"))
                                         )
                                     )
                              ),
@@ -146,11 +146,11 @@ dashboard_ui <- function(id) {
                            fluidRow( 
                              column(width = 7,
                                     div(class = "card shadow-sm",
-                                        div(class = "card-header text-white fw-bold", style = "background-color: #055A53;", "Progress Updates"),
+                                        div(class = "card-header text-white fw-bold", style = "background-color: #07234C;", "Progress Updates"),
                                         div(class = "card-body", 
                                             uiOutput(ns("act_results_chain_ui")),
                                             hr(),
-                                            DTOutput(ns("act_updates_table"))
+                                            uiOutput(ns("act_updates_list"))
                                         )
                                     )
                              ),
@@ -429,19 +429,52 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       }))
     })
     
-    # --- NEW NARRATIVE HISTORY TABLE (TAB 1) ---
+    # --- NEW NARRATIVE HISTORY LIST (TAB 1) ---
     targ_updates_raw <- reactive({
       req(input$target_actions_table_rows_selected); impl_id <- targ_actions_data()[input$target_actions_table_rows_selected, "implementedactionid"]
-      q <- "SELECT actiondate::date AS \"Date\", implementation_progress AS \"Impl. Progress\", result_progress AS \"Effectiveness\", 
-                   what_done AS \"What was done?\", what_learned AS \"What was learned?\", what_needed AS \"What is needed?\" 
-            FROM track.actiontracking WHERE implementedactionid = $1 ORDER BY actiondate DESC"
+      # THE FIX: Updated actiondate to use TO_CHAR for MM/DD/YYYY formatting
+      q <- "SELECT TO_CHAR(a.actiondate, 'MM/DD/YYYY') AS \"Date\", 
+                   a.implementation_progress AS \"Impl. Progress\", 
+                   a.result_progress AS \"Effectiveness\", 
+                   COALESCE(ip.color_hex, '#FFFFFF') AS ip_color,
+                   COALESCE(rp.color_hex, '#FFFFFF') AS rp_color,
+                   a.what_done AS \"What was done?\", 
+                   a.what_learned AS \"What was learned?\", 
+                   a.what_needed AS \"What is needed?\" 
+            FROM track.actiontracking a
+            LEFT JOIN lkup.implementation_progress ip ON a.implementation_progress = ip.progress_name
+            LEFT JOIN lkup.result_progress rp ON a.result_progress = rp.result_name
+            WHERE a.implementedactionid = $1 ORDER BY a.actiondate DESC"
       dbGetQuery(db, q, params = list(as.integer(impl_id)))
     })
     
-    output$targ_updates_table <- renderDT({
-      df <- targ_updates_raw(); if(nrow(df) == 0) return(datatable(data.frame(Message="No progress logs."), rownames=F, options=list(dom='t')))
-      datatable(df, selection = 'single', rownames = F, options = list(
-        dom = 't', paging = FALSE, scrollY = "250px", scrollCollapse = TRUE, info = FALSE)) 
+    output$targ_updates_list <- renderUI({
+      df <- targ_updates_raw()
+      if(nrow(df) == 0) return(p(class="text-muted text-center mt-3", em("No progress logs recorded yet.")))
+      
+      div(style = "max-height: 400px; overflow-y: auto; padding-right: 10px;",
+          lapply(1:nrow(df), function(i) {
+            ip_text_col <- if(df$ip_color[i] %in% c("#FF4040", "#228B22")) "white" else "black"
+            rp_text_col <- if(df$rp_color[i] %in% c("#FF4040", "#228B22")) "white" else "black"
+            
+            ip_badge <- span(class = "badge", style = paste0("background-color: ", df$ip_color[i], "; color: ", ip_text_col, "; font-size: 0.85em; border: 1px solid #ccc;"), df$`Impl. Progress`[i])
+            rp_badge <- span(class = "badge", style = paste0("background-color: ", df$rp_color[i], "; color: ", rp_text_col, "; font-size: 0.85em; border: 1px solid #ccc;"), df$Effectiveness[i])
+            
+            div(class = "mb-3 p-3 rounded shadow-sm", style = "background-color: #F8F9FA; border: 1px solid #DEE2E6;",
+                div(class = "d-flex justify-content-between align-items-center mb-3", style="border-bottom: 2px solid #e9ecef; padding-bottom: 8px;",
+                    strong(df$Date[i], style="font-size: 1.1em; color: #07234C;"),
+                    # THE FIX: Added labels next to the badges
+                    div(style = "display: flex; align-items: center; gap: 5px;",
+                        span(style="font-size: 0.85em; font-weight: bold; color: #6c757d;", "Implementation:"), ip_badge,
+                        span(style="margin-left: 10px; font-size: 0.85em; font-weight: bold; color: #6c757d;", "Effectiveness:"), rp_badge)
+                ),
+                # THE FIX: Stacked the text below the full question
+                if(!is.na(df$`What was done?`[i]) && df$`What was done?`[i] != "") div(class="mb-3", strong("What was done?", style="color: #055A53;"), p(df$`What was done?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL,
+                if(!is.na(df$`What was learned?`[i]) && df$`What was learned?`[i] != "") div(class="mb-3", strong("What was learned?", style="color: #055A53;"), p(df$`What was learned?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL,
+                if(!is.na(df$`What is needed?`[i]) && df$`What is needed?`[i] != "") div(class="mb-1", strong("What is needed?", style="color: #055A53;"), p(df$`What is needed?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL
+            )
+          })
+      )
     })
     
     # --- NEW VISUAL RESULTS CHAIN (TAB 1) ---
@@ -645,19 +678,52 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       }))
     })
     
-    # --- NEW NARRATIVE HISTORY TABLE (TAB 2) ---
+    # --- NEW NARRATIVE HISTORY LIST (TAB 2) ---
     act_updates_raw <- reactive({
       req(input$action_targets_table_rows_selected); impl_id <- act_targets_data()[input$action_targets_table_rows_selected, "implementedactionid"]
-      q <- "SELECT actiondate::date AS \"Date\", implementation_progress AS \"Impl. Progress\", result_progress AS \"Effectiveness\", 
-                   what_done AS \"What was done?\", what_learned AS \"What was learned?\", what_needed AS \"What is needed?\" 
-            FROM track.actiontracking WHERE implementedactionid = $1 ORDER BY actiondate DESC"
+      # THE FIX: Updated actiondate to use TO_CHAR for MM/DD/YYYY formatting
+      q <- "SELECT TO_CHAR(a.actiondate, 'MM/DD/YYYY') AS \"Date\", 
+                   a.implementation_progress AS \"Impl. Progress\", 
+                   a.result_progress AS \"Effectiveness\", 
+                   COALESCE(ip.color_hex, '#FFFFFF') AS ip_color,
+                   COALESCE(rp.color_hex, '#FFFFFF') AS rp_color,
+                   a.what_done AS \"What was done?\", 
+                   a.what_learned AS \"What was learned?\", 
+                   a.what_needed AS \"What is needed?\" 
+            FROM track.actiontracking a
+            LEFT JOIN lkup.implementation_progress ip ON a.implementation_progress = ip.progress_name
+            LEFT JOIN lkup.result_progress rp ON a.result_progress = rp.result_name
+            WHERE a.implementedactionid = $1 ORDER BY a.actiondate DESC"
       dbGetQuery(db, q, params = list(as.integer(impl_id)))
     })
     
-    output$act_updates_table <- renderDT({
-      df <- act_updates_raw(); if(nrow(df) == 0) return(datatable(data.frame(Message="No progress logs."), rownames=F, options=list(dom='t')))
-      datatable(df, selection = 'single', rownames = F, options = list(
-        dom = 't', paging = FALSE, scrollY = "250px", scrollCollapse = TRUE, info = FALSE))
+    output$act_updates_list <- renderUI({
+      df <- act_updates_raw()
+      if(nrow(df) == 0) return(p(class="text-muted text-center mt-3", em("No progress logs recorded yet.")))
+      
+      div(style = "max-height: 400px; overflow-y: auto; padding-right: 10px;",
+          lapply(1:nrow(df), function(i) {
+            ip_text_col <- if(df$ip_color[i] %in% c("#FF4040", "#228B22")) "white" else "black"
+            rp_text_col <- if(df$rp_color[i] %in% c("#FF4040", "#228B22")) "white" else "black"
+            
+            ip_badge <- span(class = "badge", style = paste0("background-color: ", df$ip_color[i], "; color: ", ip_text_col, "; font-size: 0.85em; border: 1px solid #ccc;"), df$`Impl. Progress`[i])
+            rp_badge <- span(class = "badge", style = paste0("background-color: ", df$rp_color[i], "; color: ", rp_text_col, "; font-size: 0.85em; border: 1px solid #ccc;"), df$Effectiveness[i])
+            
+            div(class = "mb-3 p-3 rounded shadow-sm", style = "background-color: #F8F9FA; border: 1px solid #DEE2E6;",
+                div(class = "d-flex justify-content-between align-items-center mb-3", style="border-bottom: 2px solid #e9ecef; padding-bottom: 8px;",
+                    strong(df$Date[i], style="font-size: 1.1em; color: #07234C;"),
+                    # THE FIX: Added labels next to the badges
+                    div(style = "display: flex; align-items: center; gap: 5px;",
+                        span(style="font-size: 0.85em; font-weight: bold; color: #6c757d;", "Implementation:"), ip_badge,
+                        span(style="margin-left: 10px; font-size: 0.85em; font-weight: bold; color: #6c757d;", "Effectiveness:"), rp_badge)
+                ),
+                # THE FIX: Stacked the text below the full question
+                if(!is.na(df$`What was done?`[i]) && df$`What was done?`[i] != "") div(class="mb-3", strong("What was done?", style="color: #055A53;"), p(df$`What was done?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL,
+                if(!is.na(df$`What was learned?`[i]) && df$`What was learned?`[i] != "") div(class="mb-3", strong("What was learned?", style="color: #055A53;"), p(df$`What was learned?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL,
+                if(!is.na(df$`What is needed?`[i]) && df$`What is needed?`[i] != "") div(class="mb-1", strong("What is needed?", style="color: #055A53;"), p(df$`What is needed?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL
+            )
+          })
+      )
     })
     
     # --- NEW VISUAL RESULTS CHAIN (TAB 2) ---
