@@ -91,7 +91,7 @@ dashboard_ui <- function(id) {
                                     div(class = "card shadow-sm",
                                         div(class = "card-header text-white fw-bold", style = "background-color: #055A53;", "Progress Updates"),
                                         div(class = "card-body", 
-                                            plotlyOutput(ns("targ_progress_plot"), height = "250px"),
+                                            uiOutput(ns("targ_results_chain_ui")),
                                             hr(),
                                             DTOutput(ns("targ_updates_table"))
                                         )
@@ -148,7 +148,7 @@ dashboard_ui <- function(id) {
                                     div(class = "card shadow-sm",
                                         div(class = "card-header text-white fw-bold", style = "background-color: #055A53;", "Progress Updates"),
                                         div(class = "card-body", 
-                                            plotlyOutput(ns("act_progress_plot"), height = "250px"),
+                                            uiOutput(ns("act_results_chain_ui")),
                                             hr(),
                                             DTOutput(ns("act_updates_table"))
                                         )
@@ -334,14 +334,14 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       if (is.null(tid) || tid == "") return(data.frame())
       
       q <- if(is_sp) {
-        "SELECT ia.implementedactionid, sha.specieshabitatactionsid, l2.actionl2code || '. ' || l2.actionl2name AS \"Action\", COALESCE(sadd.\"Meaningful.Details\", 'None') AS \"Action Detail\", ia.timeframe AS \"Timeframe\", ia.status AS \"Status\", ia.actiondesc
+        "SELECT ia.implementedactionid, sha.specieshabitatactionsid, l2.actionl2code || '. ' || l2.actionl2name AS \"Action\", COALESCE(sadd.\"Meaningful.Details\", 'None') AS \"Action Detail\", ia.timeframe AS \"Timeframe\", ia.implementation_progress AS \"Impl. Progress\", ia.actiondesc
          FROM track.implementedactions ia 
          JOIN track.specieshabitatactions sha ON ia.implementedactionid = sha.implementedactionid 
          JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id 
          LEFT JOIN proj.speciesactionsdetailsdistinct sadd ON sha.speciesactiondetailid = sadd.speciesactionsdetailsdistinctid 
          WHERE sha.speciesid = $1"
       } else {
-        "SELECT ia.implementedactionid, sha.specieshabitatactionsid, l2.actionl2code || '. ' || l2.actionl2name AS \"Action\", COALESCE(hadd.\"Meaningful.Details\", 'None') AS \"Action Detail\", ia.timeframe AS \"Timeframe\", ia.status AS \"Status\", ia.actiondesc
+        "SELECT ia.implementedactionid, sha.specieshabitatactionsid, l2.actionl2code || '. ' || l2.actionl2name AS \"Action\", COALESCE(hadd.\"Meaningful.Details\", 'None') AS \"Action Detail\", ia.timeframe AS \"Timeframe\", ia.implementation_progress AS \"Impl. Progress\", ia.actiondesc
          FROM track.implementedactions ia 
          JOIN track.specieshabitatactions sha ON ia.implementedactionid = sha.implementedactionid 
          JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id 
@@ -373,7 +373,7 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       detail <- if(is.na(row$`Action Detail`) || trimws(row$`Action Detail`) == "") "None" else row$`Action Detail`
       
       tagList(
-        p(class = "mb-2", strong("Status: "), row$Status, span(style="margin: 0 10px;", "|"), strong("Timeframe: "), row$Timeframe),
+        p(class = "mb-2", strong("Impl. Progress: "), row$`Impl. Progress`, span(style="margin: 0 10px;", "|"), strong("Timeframe: "), row$Timeframe),
         p(class = "mb-2", strong("Description: "), br(), em(desc)),
         p(class = "mb-0", strong("Detail: "), br(), em(detail))
       )
@@ -429,30 +429,85 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       }))
     })
     
+    # --- NEW NARRATIVE HISTORY TABLE (TAB 1) ---
     targ_updates_raw <- reactive({
       req(input$target_actions_table_rows_selected); impl_id <- targ_actions_data()[input$target_actions_table_rows_selected, "implementedactionid"]
-      dbGetQuery(db, "SELECT actiondate::date AS \"Date\", stattype AS \"Metric\", stat AS \"Value\", comments AS \"Notes\" FROM track.actiontracking WHERE implementedactionid = $1 ORDER BY actiondate ASC", params = list(as.integer(impl_id)))
-    })
-    
-    output$targ_progress_plot <- renderPlotly({
-      df <- targ_updates_raw(); if (nrow(df) == 0) return(plotly_empty())
-      plot_df <- df %>% group_by(Metric) %>% mutate(PlotValue = if_else(Metric == "Count", cumsum(Value), Value)) %>% ungroup() %>%
-        mutate(HoverText = if_else(Metric == "Count", paste0("Date: ", Date, "<br>Cumulative: ", PlotValue), paste0("Date: ", Date, "<br>Percentage: ", PlotValue, "%")))
-      p <- ggplot(plot_df, aes(x = Date, y = PlotValue, color = Metric, group = Metric, text = HoverText)) + geom_line(linewidth = 1) + geom_point(size = 2)
-      met <- unique(plot_df$Metric); if(length(met) > 1) p <- p + facet_wrap(~Metric, scales = "free_y", ncol = 1) else p <- p + labs(y = met[1])
-      if(met[1] == "Percentage") p <- p + scale_y_continuous(limits = c(0, max(100, max(plot_df$PlotValue))))
-      p <- p + scale_color_manual(values = c("Count" = "#0D67B8", "Percentage" = "#EAB11E")) + theme_classic() + theme(legend.position = "none", text = element_text(color = "black"))
-      ggplotly(p, tooltip = "text") %>% layout(hovermode = "x unified") %>% config(displayModeBar = F)
+      q <- "SELECT actiondate::date AS \"Date\", implementation_progress AS \"Impl. Progress\", result_progress AS \"Effectiveness\", 
+                   what_done AS \"What was done?\", what_learned AS \"What was learned?\", what_needed AS \"What is needed?\" 
+            FROM track.actiontracking WHERE implementedactionid = $1 ORDER BY actiondate DESC"
+      dbGetQuery(db, q, params = list(as.integer(impl_id)))
     })
     
     output$targ_updates_table <- renderDT({
-      df <- targ_updates_raw() %>% arrange(desc(Date)); if(nrow(df) == 0) return(datatable(data.frame(Message="No progress logs."), rownames=F, options=list(dom='t')))
+      df <- targ_updates_raw(); if(nrow(df) == 0) return(datatable(data.frame(Message="No progress logs."), rownames=F, options=list(dom='t')))
       datatable(df, selection = 'single', rownames = F, options = list(
-        dom = 't',
-        paging = FALSE,         
-        scrollY = "250px",       
-        scrollCollapse = TRUE,   
-        info = FALSE)) 
+        dom = 't', paging = FALSE, scrollY = "250px", scrollCollapse = TRUE, info = FALSE)) 
+    })
+    
+    # --- NEW VISUAL RESULTS CHAIN (TAB 1) ---
+    output$targ_results_chain_ui <- renderUI({
+      req(input$target_actions_table_rows_selected)
+      row <- targ_actions_data()[input$target_actions_table_rows_selected, ]
+      impl_id <- row$implementedactionid
+      sha_id <- row$specieshabitatactionsid
+      
+      # Fetch the exact live colors for this action
+      q_colors <- "
+        SELECT ia.implementation_progress, ia.result_progress, ip.color_hex AS impl_color, rp.color_hex AS res_color
+        FROM track.implementedactions ia
+        LEFT JOIN lkup.implementation_progress ip ON ia.implementation_progress = ip.progress_name
+        LEFT JOIN lkup.result_progress rp ON ia.result_progress = rp.result_name
+        WHERE ia.implementedactionid = $1
+      "
+      colors_df <- dbGetQuery(db, q_colors, params = list(as.integer(impl_id)))
+      
+      impl_col <- if(nrow(colors_df) > 0 && !is.na(colors_df$impl_color)) colors_df$impl_color else "#FFFFFF"
+      res_col <- if(nrow(colors_df) > 0 && !is.na(colors_df$res_color)) colors_df$res_color else "#FFFFFF"
+      impl_text <- if(nrow(colors_df) > 0) colors_df$implementation_progress else "Unknown"
+      res_text <- if(nrow(colors_df) > 0) colors_df$result_progress else "Unknown"
+      
+      # THE FIX: Dynamically fetch the Target Name
+      is_sp <- input$targ_type == "Species"
+      target_label <- if(is_sp) input$dash_species else input$dash_habitat
+      q_targ_name <- if(is_sp) "SELECT commonname AS name FROM proj.species WHERE speciesid = $1" else "SELECT habitatsubtypename AS name FROM proj.habitatsubtypes WHERE habitatsubtypeid = $1"
+      t_name_df <- dbGetQuery(db, q_targ_name, params = list(as.integer(target_label)))
+      target_name <- if(nrow(t_name_df) > 0) t_name_df$name[1] else "Selected Target"
+      
+      # THE FIX: Dynamically fetch the Threat Name(s) for this specific target
+      q_threat_names <- "
+        SELECT l2.threatl2code || '. ' || l2.threatl2name AS t_name FROM track.threatsaddressed ta JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id WHERE ta.specieshabitatactionsid = $1 AND ta.threatl2id != 59
+        UNION
+        SELECT alternative_category AS t_name FROM track.threatsaddressed WHERE specieshabitatactionsid = $1 AND threatl2id = 59
+      "
+      t_names <- dbGetQuery(db, q_threat_names, params = list(as.integer(sha_id)))
+      threat_label <- if(nrow(t_names) == 1) t_names$t_name[1] else if(nrow(t_names) > 1) paste0(nrow(t_names), " Threats/Goals") else "No Threats Mapped"
+      
+      # Generate the custom HTML Flowchart
+      div(style = "display: flex; align-items: stretch; justify-content: space-between; gap: 10px; text-align: center; margin-top: 10px; margin-bottom: 10px;",
+          
+          div(style = paste0("flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color:", impl_col, ";"),
+              h6("Action / Strategy", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"),
+              strong(row$Action, style = "display: block; font-size: 1.0em; color: #000;"),
+              hr(style = "margin: 8px 0; border-top: 1px solid #666;"),
+              span(style = "font-size: 0.9em; font-weight: bold; color: #333;", paste("Impl:", impl_text))
+          ),
+          
+          div(style = "display: flex; align-items: center; color: #999; font-size: 1.5em;", icon("arrow-right")),
+          
+          div(style = paste0("flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color:", res_col, ";"),
+              h6("Mitigated Threat / Goal", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"),
+              strong(threat_label, style = "display: block; font-size: 1.0em; color: #000; word-wrap: break-word;"),
+              hr(style = "margin: 8px 0; border-top: 1px solid #666;"),
+              span(style = "font-size: 0.9em; font-weight: bold; color: #333;", paste("Result:", res_text))
+          ),
+          
+          div(style = "display: flex; align-items: center; color: #999; font-size: 1.5em;", icon("arrow-right")),
+          
+          div(style = "flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color: #E2E8F0;",
+              h6("Conservation Target", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"),
+              strong(target_name, style = "display: block; font-size: 1.0em; color: #000; word-wrap: break-word;")
+          )
+      )
     })
     
     
@@ -476,7 +531,7 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       q <- "SELECT 
               ia.implementedactionid, 
               l2.actionl2code || '. ' || l2.actionl2name AS \"Action\", 
-              ia.status AS \"Status\", 
+              ia.implementation_progress AS \"Impl. Progress\", 
               ia.timeframe AS \"Timeframe\",
               ia.actiondesc,
               STRING_AGG(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END, ', ') AS \"Included Targets\"
@@ -486,7 +541,7 @@ dashboard_server <- function(id, db, db_sync_trigger) {
             LEFT JOIN proj.species s ON sha.speciesid = s.speciesid 
             LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid 
             WHERE ia.actionl2id = $1
-            GROUP BY ia.implementedactionid, l2.actionl2code, l2.actionl2name, ia.status, ia.timeframe, ia.actiondesc
+            GROUP BY ia.implementedactionid, l2.actionl2code, l2.actionl2name, ia.implementation_progress, ia.timeframe, ia.actiondesc
             ORDER BY ia.implementedactionid DESC"
       
       dbGetQuery(db, q, params = list(as.integer(input$dash_l2)))
@@ -514,7 +569,7 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       desc <- if(is.na(row$actiondesc) || trimws(row$actiondesc) == "") "No description provided." else row$actiondesc
       
       tagList(
-        p(class = "mb-2", strong("Status: "), row$Status, span(style="margin: 0 10px;", "|"), strong("Timeframe: "), row$Timeframe),
+        p(class = "mb-2", strong("Impl. Progress: "), row$`Impl. Progress`, span(style="margin: 0 10px;", "|"), strong("Timeframe: "), row$Timeframe),
         p(class = "mb-0", strong("Description: "), br(), em(desc))
       )
     })
@@ -590,30 +645,83 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       }))
     })
     
+    # --- NEW NARRATIVE HISTORY TABLE (TAB 2) ---
     act_updates_raw <- reactive({
       req(input$action_targets_table_rows_selected); impl_id <- act_targets_data()[input$action_targets_table_rows_selected, "implementedactionid"]
-      dbGetQuery(db, "SELECT actiondate::date AS \"Date\", stattype AS \"Metric\", stat AS \"Value\", comments AS \"Notes\" FROM track.actiontracking WHERE implementedactionid = $1 ORDER BY actiondate ASC", params = list(as.integer(impl_id)))
-    })
-    
-    output$act_progress_plot <- renderPlotly({
-      df <- act_updates_raw(); if (nrow(df) == 0) return(plotly_empty())
-      plot_df <- df %>% group_by(Metric) %>% mutate(PlotValue = if_else(Metric == "Count", cumsum(Value), Value)) %>% ungroup() %>%
-        mutate(HoverText = if_else(Metric == "Count", paste0("Date: ", Date, "<br>Cumulative: ", PlotValue), paste0("Date: ", Date, "<br>Percentage: ", PlotValue, "%")))
-      p <- ggplot(plot_df, aes(x = Date, y = PlotValue, color = Metric, group = Metric, text = HoverText)) + geom_line(linewidth = 1) + geom_point(size = 2)
-      met <- unique(plot_df$Metric); if(length(met) > 1) p <- p + facet_wrap(~Metric, scales = "free_y", ncol = 1) else p <- p + labs(y = met[1])
-      if(met[1] == "Percentage") p <- p + scale_y_continuous(limits = c(0, max(100, max(plot_df$PlotValue))))
-      p <- p + scale_color_manual(values = c("Count" = "#0D67B8", "Percentage" = "#EAB11E")) + theme_classic() + theme(legend.position = "none", text = element_text(color = "black"))
-      ggplotly(p, tooltip = "text") %>% layout(hovermode = "x unified") %>% config(displayModeBar = F)
+      q <- "SELECT actiondate::date AS \"Date\", implementation_progress AS \"Impl. Progress\", result_progress AS \"Effectiveness\", 
+                   what_done AS \"What was done?\", what_learned AS \"What was learned?\", what_needed AS \"What is needed?\" 
+            FROM track.actiontracking WHERE implementedactionid = $1 ORDER BY actiondate DESC"
+      dbGetQuery(db, q, params = list(as.integer(impl_id)))
     })
     
     output$act_updates_table <- renderDT({
-      df <- act_updates_raw() %>% arrange(desc(Date)); if(nrow(df) == 0) return(datatable(data.frame(Message="No progress logs."), rownames=F, options=list(dom='t')))
+      df <- act_updates_raw(); if(nrow(df) == 0) return(datatable(data.frame(Message="No progress logs."), rownames=F, options=list(dom='t')))
       datatable(df, selection = 'single', rownames = F, options = list(
-        dom = 't',
-        paging = FALSE,         
-        scrollY = "250px",       
-        scrollCollapse = TRUE,   
-        info = FALSE))
+        dom = 't', paging = FALSE, scrollY = "250px", scrollCollapse = TRUE, info = FALSE))
+    })
+    
+    # --- NEW VISUAL RESULTS CHAIN (TAB 2) ---
+    output$act_results_chain_ui <- renderUI({
+      req(input$action_targets_table_rows_selected)
+      row <- act_targets_data()[input$action_targets_table_rows_selected, ]
+      impl_id <- row$implementedactionid
+      
+      # Fetch the exact live colors for this action
+      q_colors <- "
+        SELECT ia.implementation_progress, ia.result_progress, ip.color_hex AS impl_color, rp.color_hex AS res_color
+        FROM track.implementedactions ia
+        LEFT JOIN lkup.implementation_progress ip ON ia.implementation_progress = ip.progress_name
+        LEFT JOIN lkup.result_progress rp ON ia.result_progress = rp.result_name
+        WHERE ia.implementedactionid = $1
+      "
+      colors_df <- dbGetQuery(db, q_colors, params = list(as.integer(impl_id)))
+      
+      impl_col <- if(nrow(colors_df) > 0 && !is.na(colors_df$impl_color)) colors_df$impl_color else "#FFFFFF"
+      res_col <- if(nrow(colors_df) > 0 && !is.na(colors_df$res_color)) colors_df$res_color else "#FFFFFF"
+      impl_text <- if(nrow(colors_df) > 0) colors_df$implementation_progress else "Unknown"
+      res_text <- if(nrow(colors_df) > 0) colors_df$result_progress else "Unknown"
+      
+      # THE FIX: Dynamically fetch ALL Threat Name(s) mapped to this action
+      q_threat_names <- "
+        SELECT DISTINCT l2.threatl2code || '. ' || l2.threatl2name AS t_name
+        FROM track.threatsaddressed ta
+        JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid
+        JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id
+        WHERE sha.implementedactionid = $1 AND ta.threatl2id != 59
+        UNION
+        SELECT DISTINCT alternative_category AS t_name
+        FROM track.threatsaddressed ta
+        JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid
+        WHERE sha.implementedactionid = $1 AND ta.threatl2id = 59
+      "
+      t_names <- dbGetQuery(db, q_threat_names, params = list(as.integer(impl_id)))
+      threat_label <- if(nrow(t_names) == 1) t_names$t_name[1] else if(nrow(t_names) > 1) paste0(nrow(t_names), " Threats/Goals") else "No Threats Mapped"
+      
+      div(style = "display: flex; align-items: stretch; justify-content: space-between; gap: 10px; text-align: center; margin-top: 10px; margin-bottom: 10px;",
+          
+          div(style = paste0("flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color:", impl_col, ";"),
+              h6("Action / Strategy", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"),
+              strong(row$Action, style = "display: block; font-size: 1.0em; color: #000;"),
+              hr(style = "margin: 8px 0; border-top: 1px solid #666;"),
+              span(style = "font-size: 0.9em; font-weight: bold; color: #333;", paste("Impl:", impl_text))
+          ),
+          
+          div(style = "display: flex; align-items: center; color: #999; font-size: 1.5em;", icon("arrow-right")),
+          
+          div(style = paste0("flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color:", res_col, ";"),
+              h6("Mitigated Threat / Goal", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"),
+              strong(threat_label, style = "display: block; font-size: 1.0em; color: #000; word-wrap: break-word;"),
+              hr(style = "margin: 8px 0; border-top: 1px solid #666;"),
+              span(style = "font-size: 0.9em; font-weight: bold; color: #333;", paste("Result:", res_text))
+          ),
+          
+          div(style = "display: flex; align-items: center; color: #999; font-size: 1.5em;", icon("arrow-right")),
+          
+          div(style = "flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color: #E2E8F0;",
+              h6("Conservation Targets", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"),
+              strong(row$`Included Targets`, style = "display: block; font-size: 1.0em; color: #000; word-wrap: break-word;")
+          )
+      )
     })
     
     
@@ -631,7 +739,7 @@ dashboard_server <- function(id, db, db_sync_trigger) {
                 WHEN tgts.t_count > 1 THEN 'Multiple'
                 ELSE 'None'
               END AS \"Species/Habitat\",
-              ia.status AS \"Status\",
+              ia.implementation_progress AS \"Impl. Progress\",
               ia.actiondesc
             FROM track.implementedactions ia 
             JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id 
@@ -645,7 +753,15 @@ dashboard_server <- function(id, db, db_sync_trigger) {
               LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid
               GROUP BY sha.implementedactionid
             ) tgts ON ia.implementedactionid = tgts.implementedactionid
-            ORDER BY CASE WHEN ia.status = 'Completed' THEN 1 WHEN ia.status = 'In Progress' THEN 2 WHEN ia.status = 'Planned' THEN 3 ELSE 4 END ASC, ia.createdon DESC"
+            ORDER BY 
+              CASE ia.implementation_progress 
+                WHEN 'Completed' THEN 1 
+                WHEN 'On-track' THEN 2 
+                WHEN 'Minor issues' THEN 3 
+                WHEN 'Major issues' THEN 4 
+                WHEN 'Scheduled for future' THEN 5 
+                ELSE 6 
+              END ASC, ia.createdon DESC"
       dbGetQuery(db, q)
     })
     
@@ -669,7 +785,7 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       desc <- if(is.na(row$actiondesc) || trimws(row$actiondesc) == "") "No description provided." else row$actiondesc
       
       tagList(
-        p(class = "mb-2", strong("Status: "), row$Status, span(style="margin: 0 10px;", "|"), strong("Timeframe: "), row$Timeframe),
+        p(class = "mb-2", strong("Impl. Progress: "), row$`Impl. Progress`),
         p(class = "mb-0", strong("Description: "), br(), em(desc))
       )
     })
@@ -730,13 +846,48 @@ dashboard_server <- function(id, db, db_sync_trigger) {
     })
     
     output$all_act_recent_update_ui <- renderUI({
-      req(input$all_actions_table_rows_selected); impl_id <- all_actions_data()[input$all_actions_table_rows_selected, "implementedactionid"]
-      q <- "SELECT actiondate::date AS d, stattype AS m, stat AS v, comments AS n, COALESCE(p.first_name || ' ' || p.last_name, a.createdby) AS u FROM track.actiontracking a LEFT JOIN public.profiles p ON a.createdby = p.id::text WHERE a.implementedactionid = $1 ORDER BY a.actiondate DESC LIMIT 1"
+      req(input$all_actions_table_rows_selected)
+      impl_id <- all_actions_data()[input$all_actions_table_rows_selected, "implementedactionid"]
+      
+      # THE FIX: Updated query to fetch the color_hex from the lookup tables
+      q <- "SELECT actiondate::date AS d, 
+                   a.implementation_progress AS ip, 
+                   a.result_progress AS rp, 
+                   COALESCE(ip_lkup.color_hex, '#FFFFFF') AS ip_color,
+                   COALESCE(rp_lkup.color_hex, '#FFFFFF') AS rp_color,
+                   a.what_done, a.what_learned, a.what_needed, 
+                   COALESCE(p.first_name || ' ' || p.last_name, a.createdby) AS u 
+            FROM track.actiontracking a 
+            LEFT JOIN public.profiles p ON a.createdby = p.id::text 
+            LEFT JOIN lkup.implementation_progress ip_lkup ON a.implementation_progress = ip_lkup.progress_name
+            LEFT JOIN lkup.result_progress rp_lkup ON a.result_progress = rp_lkup.result_name
+            WHERE a.implementedactionid = $1 ORDER BY a.actiondate DESC LIMIT 1"
+      
       res <- dbGetQuery(db, q, params = list(as.integer(impl_id)))
+      
       if(nrow(res) == 0) return(p(em("No updates logged.")))
-      tagList(p(strong("Date: "), res$d, br(), strong(paste0("Metric (", res$m, "): ")), res$v, br(), strong("User: "), res$u), p(strong("Notes: "), br(), em(res$n)))
+      
+      # Determine text color for contrast (white text for dark red and dark green)
+      ip_text_col <- if(res$ip_color %in% c("#FF4040", "#228B22")) "white" else "black"
+      rp_text_col <- if(res$rp_color %in% c("#FF4040", "#228B22")) "white" else "black"
+      
+      # Create the Bootstrap Badges
+      ip_badge <- span(class = "badge text-wrap", style = paste0("background-color: ", res$ip_color, "; color: ", ip_text_col, "; font-size: 0.9em; padding: 6px 10px; border: 1px solid #ccc; border-radius: 5px;"), res$ip)
+      rp_badge <- span(class = "badge text-wrap", style = paste0("background-color: ", res$rp_color, "; color: ", rp_text_col, "; font-size: 0.9em; padding: 6px 10px; border: 1px solid #ccc; border-radius: 5px;"), res$rp)
+      
+      tagList(
+        p(class = "mb-3 text-muted", strong("Date: "), res$d, span(style="margin: 0 10px;", "|"), strong("User: "), res$u),
+        
+        div(class = "mb-4",
+            div(style = "margin-bottom: 8px; display: flex; align-items: center;", strong("Impl. Progress: ", style="margin-right: 10px;"), ip_badge),
+            div(style = "display: flex; align-items: center;", strong("Effectiveness: ", style="margin-right: 10px;"), rp_badge)
+        ),
+        
+        if(!is.na(res$what_done) && res$what_done != "") p(strong("What was done? "), br(), em(res$what_done)) else NULL,
+        if(!is.na(res$what_learned) && res$what_learned != "") p(strong("What was learned? "), br(), em(res$what_learned)) else NULL,
+        if(!is.na(res$what_needed) && res$what_needed != "") p(strong("What is needed? "), br(), em(res$what_needed)) else NULL
+      )
     })
-    
     
     # -----------------------------------------------------
     # TAB 4 LOGIC (Figures)

@@ -53,9 +53,18 @@ add_action_ui <- function(id) {
         div(class = "card mb-4 shadow-sm", style = "overflow: visible;",
             div(class = "card-header bg-primary text-white", "Action Details & Mitigated Threats"),
             div(class = "card-body", style = "overflow: visible;",
+                
+                # THE FIX: Added Dual-Stoplight Dropdowns with Tooltips for Path A
                 layout_columns(
                   selectInput(ns("timeframe"), "Timeframe ", choices = c("Short Term", "Long Term")),
-                  selectInput(ns("status"), "Status", choices = c("Planned", "In Progress", "Completed"))
+                  selectInput(ns("implementation_progress"), 
+                              label = tooltip(span("Implementation Progress ", icon("circle-info")), "What has been done? Measures the progress of implementing the action."),
+                              choices = c("Not specified", "Scheduled for future", "Major issues", "Minor issues", "On-track", "Completed", "Abandoned"),
+                              selected = "Scheduled for future"),
+                  selectInput(ns("result_progress"), 
+                              label = tooltip(span("Effectiveness Progress ", icon("circle-info")), "What has been achieved? Measures progress towards reducing the threat or achieving the goal."),
+                              choices = c("Not specified", "Not Yet", "Not achieved", "Partially achieved", "On-track", "Achieved", "No longer relevant"),
+                              selected = "Not Yet")
                 ),
                 layout_columns(
                   selectInput(ns("action_l2"), "Select Action", choices = c("Loading..." = "")),
@@ -85,9 +94,18 @@ add_action_ui <- function(id) {
           div(class = "card-body",  style = "overflow: visible;",
               p("Use the Action Lexicon below as a guide to find your exact Level 0, Level 1, and Level 2 actions."),
               div(class = "text-center mb-4", tags$img(src = "action_lexicon.png", class = "img-fluid border rounded shadow-sm", style = "max-height: 400px; width: auto;")),
+              
+              # THE FIX: Added Dual-Stoplight Dropdowns with Tooltips for Path B
               layout_columns(
                 selectInput(ns("act_timeframe"), "Timeframe", choices = c("Short Term", "Long Term")),
-                selectInput(ns("act_status"), "Status", choices = c("Planned", "In Progress", "Completed"))
+                selectInput(ns("act_implementation_progress"), 
+                            label = tooltip(span("Implementation Progress ", icon("circle-info")), "What has been done? Measures the progress of implementing the action."),
+                            choices = c("Not specified", "Scheduled for future", "Major issues", "Minor issues", "On-track", "Completed", "Abandoned"),
+                            selected = "Scheduled for future"),
+                selectInput(ns("act_result_progress"), 
+                            label = tooltip(span("Effectiveness Progress ", icon("circle-info")), "What has been achieved? Measures progress towards reducing the threat or achieving the goal."),
+                            choices = c("Not specified", "Not Yet", "Not achieved", "Partially achieved", "On-track", "Achieved", "No longer relevant"),
+                            selected = "Not Yet")
               ),
               layout_columns(
                 selectInput(ns("act_l0"), "Level 0 Category", choices = c("Loading..." = "")),
@@ -175,7 +193,6 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
       if (nrow(valid_details) > 0) updateSelectizeInput(session, "action_detail", choices = c("None (Optional)" = "none", setNames(valid_details$detail_id, valid_details$detail_text)))
       else updateSelectizeInput(session, "action_detail", choices = c("No Details Found for this Timeframe" = "none"))
       
-      # FIX: Added l2.threatl2id != 59 exclusion
       q_threats <- if(is_species) {
         "SELECT l2.threatl2id, l2.threatl2code || '. ' || l2.threatl2name AS threat_name, l1.threatl1code || '. ' || l1.threatl1name AS l1_context, l0.threatl0name AS l0_context
          FROM xref.species_threatsl2 x 
@@ -300,8 +317,9 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
           target_id <- as.integer(if(is_species) input$species_select else input$habitat_subtype)
           detail_val <- if(is.null(input$action_detail) || input$action_detail == "none" || input$action_detail == "") NA_integer_ else as.integer(input$action_detail)
           
-          q1 <- "INSERT INTO track.implementedactions (actionl2id, timeframe, actiondesc, status, createdby) VALUES ($1, $2, $3, $4, $5) RETURNING implementedactionid"
-          res1 <- dbGetQuery(conn, q1, params = list(as.integer(input$action_l2), input$timeframe, input$action_desc, input$status, current_user()$user_id))
+          # THE FIX: Insert statements use implementation_progress and result_progress instead of status
+          q1 <- "INSERT INTO track.implementedactions (actionl2id, timeframe, actiondesc, implementation_progress, result_progress, createdby) VALUES ($1, $2, $3, $4, $5, $6) RETURNING implementedactionid"
+          res1 <- dbGetQuery(conn, q1, params = list(as.integer(input$action_l2), input$timeframe, input$action_desc, input$implementation_progress, input$result_progress, current_user()$user_id))
           new_impl_id <- res1$implementedactionid[1]
           
           if (is_species) {
@@ -328,7 +346,11 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
         db_sync_trigger(db_sync_trigger() + 1)
         showNotification("Success! Action recorded.", type = "message", duration = 5)
         
+        # Reset UI
         updateTextAreaInput(session, "action_desc", value = "")
+        updateSelectInput(session, "implementation_progress", selected = "Scheduled for future")
+        updateSelectInput(session, "result_progress", selected = "Not Yet")
+        
         for(t_id in vt$threatl2id) {
           updateCheckboxInput(session, paste0("chk_threat_a_", t_id), value = FALSE)
           updateTextAreaInput(session, paste0("just_threat_a_", t_id), value = "")
@@ -389,7 +411,6 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
       if (length(sel_sp) > 0) {
         for (sp_id in sel_sp) {
           sp_name <- dbGetQuery(db, "SELECT commonname FROM proj.species WHERE speciesid = $1", params = list(sp_id))$commonname[1]
-          
           
           threats <- dbGetQuery(db, "SELECT l2.threatl2id, l2.threatl2code || '. ' || l2.threatl2name AS threat_name, l1.threatl1code || '. ' || l1.threatl1name AS l1_context, l0.threatl0name AS l0_context FROM xref.species_threatsl2 x JOIN proj.l2_threats l2 ON x.threatl2id = l2.threatl2id JOIN proj.l1_threats l1 ON l2.threatl1id = l1.threatl1id JOIN proj.l0_threats l0 ON l1.threatl0id = l0.threatl0id WHERE x.speciesid = $1 AND l2.threatl2id != 59 ORDER BY l0.threatl0code, CAST(SPLIT_PART(l2.threatl2code, '.', 1) AS INTEGER), CAST(SPLIT_PART(l2.threatl2code, '.', 2) AS INTEGER)", params = list(sp_id))
           
@@ -575,8 +596,9 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
       tryCatch({
         pool::poolWithTransaction(db, function(conn) {
           
-          q1 <- "INSERT INTO track.implementedactions (actionl2id, timeframe, actiondesc, status, createdby) VALUES ($1, $2, $3, $4, $5) RETURNING implementedactionid"
-          res1 <- dbGetQuery(conn, q1, params = list(as.integer(input$act_l2), input$act_timeframe, input$act_desc, input$act_status, current_user()$user_id))
+          # THE FIX: Insert statements use implementation_progress and result_progress instead of status
+          q1 <- "INSERT INTO track.implementedactions (actionl2id, timeframe, actiondesc, implementation_progress, result_progress, createdby) VALUES ($1, $2, $3, $4, $5, $6) RETURNING implementedactionid"
+          res1 <- dbGetQuery(conn, q1, params = list(as.integer(input$act_l2), input$act_timeframe, input$act_desc, input$act_implementation_progress, input$act_result_progress, current_user()$user_id))
           new_impl_id <- res1$implementedactionid[1]
           
           # INSERT SPECIES 
@@ -640,9 +662,14 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
         
         db_sync_trigger(db_sync_trigger() + 1)
         showNotification("Success! Action recorded.", type = "message", duration = 5)
+        
+        # Reset UI
         updateTextAreaInput(session, "act_desc", value = "")
+        updateSelectInput(session, "act_implementation_progress", selected = "Scheduled for future")
+        updateSelectInput(session, "act_result_progress", selected = "Not Yet")
         updateSelectizeInput(session, "act_target_species", selected = character(0))
         updateSelectizeInput(session, "act_target_habitats", selected = character(0))
+        
         nav_home_trigger(nav_home_trigger() + 1)
         
       }, error = function(e) {

@@ -15,7 +15,6 @@ update_action_ui <- function(id) {
       ),
       
       column(7,
-            
              conditionalPanel(
                condition = sprintf("input['%s'] != null", ns("action_table_rows_selected")),
                
@@ -47,10 +46,10 @@ update_action_ui <- function(id) {
                                    )
                          ),
                          
-                         #TAB 2: LOG PROGRESS
+                         # TAB 2: LOG PROGRESS & NARRATIVE
                          nav_panel("Log Update/Progress",
                                    div(class = "mt-4",
-     
+                                       
                                        div(class = "card mb-4 shadow-sm",
                                            div(class = "card-header text-white", style = "background-color: #055A53;", "Progress Logs"),
                                            div(class = "card-body",
@@ -61,42 +60,52 @@ update_action_ui <- function(id) {
                                        div(class = "card mb-2 shadow-sm", style = "border-color: #0D67B8;",
                                            div(class = "card-header text-white", style = "background-color: #0D67B8;", "Log Update/Progress"),
                                            div(class = "card-body", style = "overflow: visible;",
-                                               p("Submit updates/progress metrics (e.g., acres treated, surveys completed, percentage of plan completed, etc.).", class="text-muted"),
+                                               p("Update the current progress statuses and provide narrative context for this action.", class="text-muted"),
+                                               
                                                layout_columns(
                                                  dateInput(ns("action_date"), "Date of Update", value = Sys.Date(), width = "100%"),
-                                                 selectInput(ns("stat_type"), "Metric (% or Count)", choices = c("Percentage", "Count"), width = "100%"),
-                                                 numericInput(ns("stat_value"), "Value", value = 0, min = 0, width = "100%")
+                                                 selectInput(ns("upd_impl_prog"), "Implementation Progress", 
+                                                             choices = c("Not specified", "Scheduled for future", "Major issues", "Minor issues", "On-track", "Completed", "Abandoned")),
+                                                 selectInput(ns("upd_res_prog"), "Effectiveness Progress", 
+                                                             choices = c("Not specified", "Not Yet", "Not achieved", "Partially achieved", "On-track", "Achieved", "No longer relevant"))
                                                ),
-                                               div(class = "mt-3",
-                                                   textAreaInput(ns("comments"), "Update Notes", rows = 2, width = "100%")
+                                               
+                                               # Narrative Text Boxes
+                                               div(class = "mt-2",
+                                                   textAreaInput(ns("what_done"), "1. What was done?", rows = 2, width = "100%", placeholder = "Describe the specific activities carried out..."),
+                                                   textAreaInput(ns("what_learned"), "2. What was learned?", rows = 2, width = "100%", placeholder = "Describe how effective the action was and any new insights..."),
+                                                   textAreaInput(ns("what_needed"), "3. What is still needed?", rows = 2, width = "100%", placeholder = "Describe next steps, funding needs, or strategy shifts...")
                                                ),
-                                               actionButton(ns("submit_progress"), "Submit", class = "btn-primary btn-lg mt-3 w-100", style="font-weight: bold;")
-                                           )
-                                       )
-                                   )
-                         ),
-                         
-                         # TAB 3: UPDATE OVERALL ACTION STATUS
-                         nav_panel("Update Overall Action Status",
-                                   div(class = "mt-4",
-                                       
-                                       # Action Summary Context Box
-                                       uiOutput(ns("status_action_summary")),
-                                       
-                                       div(class = "card mb-2 shadow-sm", style = "border-color: #EAB11E;",
-                                           div(class = "card-header text-dark fw-bold", style = "background-color: #EAB11E;", "Overall Action Lifecycle"),
-                                           div(class = "card-body",
-                                               p("Change this only if the entire action has moved to a new phase (e.g., transitioning from Planned to In Progress, or marking the project as fully Completed).", class="text-muted"),
-                                               layout_columns(
-                                                 selectInput(ns("new_status"), "Current Status", 
-                                                             choices = c("Planned", "In Progress", "Completed"), 
-                                                             width = "100%"),
-                                                 actionButton(ns("submit_status"), "Update Overall Status", class = "btn-success btn-lg mt-3 w-100", style="font-weight: bold;")
-                                               )
+                                               
+                                               hr(),
+                                               
+                                               # Optional Resource Upload
+                                               checkboxInput(ns("add_resource_check"), strong("I have a file/resource to upload with this update"), value = FALSE),
+                                               conditionalPanel(
+                                                 condition = sprintf("input['%s'] == true", ns("add_resource_check")),
+                                                 div(class = "p-3 rounded mt-2 mb-3", style = "background-color: #F8F9FA; border: 1px solid #DEE2E6;",
+                                                     h6("Upload Resource", class="fw-bold text-muted"),
+                                                     selectInput(ns("res_target"), "Apply this resource to which target?", choices = c("Loading..." = ""), width = "100%"),
+                                                     layout_columns(
+                                                       textInput(ns("res_name"), "Resource Name", placeholder = "e.g., 2025 Survey Report"),
+                                                       selectInput(ns("res_type"), "Resource Type", choices = c(
+                                                         "Document/Report" = "Document", 
+                                                         "Data/Spreadsheet" = "Data", 
+                                                         "Map/GIS" = "Map", 
+                                                         "Management Plan" = "Plan", 
+                                                         "Other" = "Other"
+                                                       ))
+                                                     ),
+                                                     fileInput(ns("res_file"), "Select File (PDF, Word, Excel, CSV)", accept = c(".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv"))
+                                                 )
+                                               ),
+                                               
+                                               actionButton(ns("submit_progress"), "Submit Update", class = "btn-primary btn-lg mt-3 w-100", style="font-weight: bold;")
                                            )
                                        )
                                    )
                          )
+                         # NOTE: Tab 3 (Overall Status) was removed because the Stoplight statuses replace it!
                        )
                    )
                )
@@ -112,13 +121,13 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
     # --- FETCH ACTIONS ---
     action_data <- reactive({
       db_sync_trigger()
-      # THE FIX: We use STRING_AGG to combine targets into a single hidden column
       query <- "
         SELECT 
           ia.implementedactionid,
           l2.actionl2code || '. ' || l2.actionl2name AS \"Action\",
           ia.timeframe AS \"Timeframe\",
-          ia.status AS \"Status\",
+          ia.implementation_progress AS \"Implementation\",
+          ia.result_progress AS \"Effectiveness\",
           CASE WHEN ia.createdby = $1::text THEN 'Creator' ELSE 'Delegate' END AS \"Role\",
           STRING_AGG(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END, ', ') AS \"Searchable_Targets\"
         FROM track.implementedactions ia
@@ -128,8 +137,8 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
         LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid
         LEFT JOIN track.delegateusers du ON ia.implementedactionid = du.implementedactionid
         WHERE ia.createdby = $1::text OR du.userid = $2::text
-        GROUP BY ia.implementedactionid, l2.actionl2code, l2.actionl2name, ia.timeframe, ia.status, ia.createdby
-        ORDER BY ia.status DESC, \"Action\" ASC
+        GROUP BY ia.implementedactionid, l2.actionl2code, l2.actionl2name, ia.timeframe, ia.implementation_progress, ia.result_progress, ia.createdby
+        ORDER BY ia.implementation_progress ASC, \"Action\" ASC
       "
       dbGetQuery(db, query, params = list(current_user()$user_id, current_user()$user_id))
     })
@@ -141,8 +150,8 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
                   paging = FALSE, 
                   dom = 'ft',
                   scrollCollapse = TRUE,
-                  # THE FIX: Hide index 0 (ID) and index 5 (Searchable_Targets), but keep them searchable!
-                  columnDefs = list(list(visible = FALSE, targets = c(0, 5)))
+                  # HIDE: index 0 (ID) and index 6 (Searchable_Targets)
+                  columnDefs = list(list(visible = FALSE, targets = c(0, 6)))
                 ))
     })
     
@@ -157,12 +166,10 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
       impl_id <- action_data()[input$action_table_rows_selected, "implementedactionid"]
       selected_row <- action_data()[input$action_table_rows_selected, ]
       
-      # 1. Fetch Core Info (Description)
       q_core <- "SELECT actiondesc FROM track.implementedactions WHERE implementedactionid = $1"
       core_df <- dbGetQuery(db, q_core, params = list(as.integer(impl_id)))
       desc_text <- if(nrow(core_df) > 0 && !is.na(core_df$actiondesc[1]) && core_df$actiondesc[1] != "") core_df$actiondesc[1] else "No description provided."
       
-      # 2. Fetch All Targets & Lexicon Details for this Action
       q_targ <- "
         SELECT 
           CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_name,
@@ -177,12 +184,11 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
       "
       targ_df <- dbGetQuery(db, q_targ, params = list(as.integer(impl_id)))
       
-      # 3. Fetch All Distinct Threats for this Action WITH their associated Targets
       q_threats <- "
         SELECT 
           l2.threatl2code || '. ' || l2.threatl2name AS threat_name, 
-          ta.justification,
-          CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_name
+          ta.justification, ta.alternative_category, ta.justification_text,
+          CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_name, ta.threatl2id
         FROM track.threatsaddressed ta
         JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid
         JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id
@@ -193,7 +199,6 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
       "
       threats_df <- dbGetQuery(db, q_threats, params = list(as.integer(impl_id)))
       
-      # Build HTML for Targets
       targ_ui <- if(nrow(targ_df) > 0) {
         tags$ul(class = "mt-2 mb-0", lapply(1:nrow(targ_df), function(i) {
           tags$li(strong(targ_df$target_name[i]), " (", targ_df$target_type[i], ")", br(),
@@ -201,16 +206,17 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
         }))
       } else { p(em("No targets assigned."), class="mb-0") }
       
-      # Build HTML for Threats (Now including Target labels!)
       threat_ui <- if(nrow(threats_df) > 0) {
         tags$ul(class = "mt-2 mb-0", lapply(1:nrow(threats_df), function(i) {
-          tags$li(
-            strong(threats_df$threat_name[i]), 
-            span(class = "text-primary", style = "font-size: 0.9em; font-weight: bold;", paste0(" [", threats_df$target_name[i], "]")),
-            br(), 
-            em("Justification: "), threats_df$justification[i], 
-            class = "mb-3"
-          )
+          if (threats_df$threatl2id[i] == 59) {
+            tags$li(strong("Broader Conservation Goal: ", style="color: #0D67B8;"), threats_df$alternative_category[i], 
+                    span(class = "text-primary", style = "font-size: 0.9em; font-weight: bold;", paste0(" [", threats_df$target_name[i], "]")),
+                    br(), em("Justification: "), threats_df$justification_text[i], class = "mb-3")
+          } else {
+            tags$li(strong(threats_df$threat_name[i]), 
+                    span(class = "text-primary", style = "font-size: 0.9em; font-weight: bold;", paste0(" [", threats_df$target_name[i], "]")),
+                    br(), em("Justification: "), threats_df$justification[i], class = "mb-3")
+          }
         }))
       } else { p(em("No threats recorded."), class="mb-0") }
       
@@ -219,14 +225,15 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
           div(h6("Action Overview", class = "text-muted mb-1"),
               p(strong("Action: "), selected_row$Action, br(),
                 strong("Timeframe: "), selected_row$Timeframe, br(),
-                strong("Status: "), selected_row$Status)),
+                strong("Impl. Progress: "), selected_row$Implementation, br(),
+                strong("Effectiveness: "), selected_row$Effectiveness)),
           div(h6("Implementation Specifics", class = "text-muted mb-1"),
               p(strong("User Description: "), desc_text))
         ),
         hr(), 
         layout_columns(
           div(h6("Targets & Details", class = "text-muted mb-1"), targ_ui),
-          div(h6("Mitigated Threats", class = "text-muted mb-1"), threat_ui)
+          div(h6("Mitigated Threats / Goals", class = "text-muted mb-1"), threat_ui)
         )
       )
     })
@@ -269,7 +276,6 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
           selectInput(session$ns("new_delegate_id"), NULL, choices = c("Choose a user..." = "", user_choices), width = "100%"),
           actionButton(session$ns("btn_add_delegate"), "Add Delegate", class = "btn-warning w-100", style = "font-weight: bold;")
         )
-        
         layout_columns(div(h6("Current Access", class = "fw-bold text-muted"), collab_list), add_tools)
       } else {
         div(h6("Current Access", class = "fw-bold text-muted"), collab_list)
@@ -279,21 +285,24 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
     observeEvent(input$btn_add_delegate, {
       req(input$action_table_rows_selected, input$new_delegate_id)
       impl_id <- action_data()[input$action_table_rows_selected, "implementedactionid"]
-      
       dbExecute(db, "INSERT INTO track.delegateusers (implementedactionid, userid) VALUES ($1, $2)", 
                 params = list(as.integer(impl_id), input$new_delegate_id))
-      
       showNotification("Delegate added successfully!", type = "message")
       db_sync_trigger(db_sync_trigger() + 1)
     })
     
-    # PREVIOUS UPDATES HISTORY 
+    # --- NARRATIVE PROGRESS HISTORY --- 
     action_history <- reactive({
       req(input$action_table_rows_selected)
       db_sync_trigger() 
       impl_id <- action_data()[input$action_table_rows_selected, "implementedactionid"]
       query <- "
-        SELECT a.actiondate::date AS \"Date\", a.stattype AS \"Metric\", a.stat AS \"Value\", a.comments AS \"Notes\", 
+        SELECT a.actiondate::date AS \"Date\", 
+               a.implementation_progress AS \"Impl. Progress\", 
+               a.result_progress AS \"Effectiveness\", 
+               a.what_done AS \"What was done?\",
+               a.what_learned AS \"What was learned?\",
+               a.what_needed AS \"What is needed?\",
                COALESCE(p.first_name || ' ' || p.last_name, a.createdby) AS \"Entered By\"
         FROM track.actiontracking a LEFT JOIN public.profiles p ON a.createdby = p.id::text
         WHERE a.implementedactionid = $1 ORDER BY a.actiondate DESC
@@ -301,52 +310,121 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
       dbGetQuery(db, query, params = list(as.integer(impl_id)))
     })
     
-    # Lock in the Metric Type dropdown (percentage or count) if history exists
-    observeEvent(action_history(), {
-      df <- action_history()
-      if (nrow(df) > 0) {
-        locked_metric <- df$Metric[1]
-        updateSelectInput(session, "stat_type", choices = locked_metric, selected = locked_metric)
-      } else {
-        updateSelectInput(session, "stat_type", choices = c("Percentage", "Count"), selected = "Percentage")
-      }
+    # Pre-fill dropdowns and resource targets when row is selected
+    observeEvent(input$action_table_rows_selected, {
+      req(input$action_table_rows_selected)
+      selected_row <- action_data()[input$action_table_rows_selected, ]
+      
+      updateSelectInput(session, "upd_impl_prog", selected = selected_row$Implementation)
+      updateSelectInput(session, "upd_res_prog", selected = selected_row$Effectiveness)
+      
+      # Populate the dynamic Resource Target dropdown based on this action's targets
+      q_targs <- "
+        SELECT 
+          CASE WHEN sha.specieshabitat = TRUE THEN 'sp_' || sha.speciesid ELSE 'hab_' || sha.habitatsubtypeid END AS id_val,
+          CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS label_val
+        FROM track.specieshabitatactions sha
+        LEFT JOIN proj.species s ON sha.speciesid = s.speciesid
+        LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid
+        WHERE sha.implementedactionid = $1
+        ORDER BY label_val ASC
+      "
+      targs_df <- dbGetQuery(db, q_targs, params = list(as.integer(selected_row$implementedactionid)))
+      updateSelectInput(session, "res_target", choices = c("Select target..." = "", setNames(targs_df$id_val, targs_df$label_val)))
     })
     
     output$history_table <- renderDT({
       df <- action_history()
       if(nrow(df) == 0) datatable(df, rownames = FALSE, options = list(
-        dom = 't',
-        paging = FALSE,        
-        scrollY = "200px", 
-        scrollCollapse = TRUE,
+        dom = 't', paging = FALSE, scrollY = "200px", scrollCollapse = TRUE,
         language = list(emptyTable = "No updates have been recorded for this action yet.")))
-      else datatable(df, rownames = FALSE, options = list(dom = 't',
-                                                          paging = FALSE,        
-                                                          scrollY = "200px",
-                                                          scrollCollapse = TRUE))
+      else datatable(df, rownames = FALSE, options = list(dom = 't', paging = FALSE, scrollY = "300px", scrollCollapse = TRUE))
     })
     
-    observeEvent(input$action_table_rows_selected, {
-      req(input$action_table_rows_selected)
-      current_status <- action_data()[input$action_table_rows_selected, "Status"]
-      updateSelectInput(session, "new_status", selected = current_status)
-    })
-    
-    # SUBMIT LOG PROGRESS 
-    
+    # --- SUBMIT NARRATIVE PROGRESS LOG ---
     execute_progress_log <- function(selected_row) {
+      
+      # 1. Handle File Upload (If checked)
+      if (isTRUE(input$add_resource_check)) {
+        if (is.null(input$res_file) || input$res_target == "" || input$res_name == "") {
+          showNotification("Please fill out all resource fields and select a file.", type = "error")
+          return()
+        }
+        
+        base_url <- Sys.getenv("SUPABASE_URL")
+        api_key <- Sys.getenv("SUPABASE_ANON_KEY")
+        user_token <- current_user()$token
+        
+        safe_filename <- paste0(as.integer(Sys.time()), "_", gsub("[^[:alnum:]._-]", "", input$res_file$name))
+        file_ext <- tolower(tools::file_ext(safe_filename))
+        mime_type <- switch(file_ext,
+                            "pdf" = "application/pdf", "csv" = "text/csv", "doc" = "application/msword",
+                            "docx" = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            "xls" = "application/vnd.ms-excel", "xlsx" = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            "application/octet-stream"
+        )
+        
+        storage_endpoint <- paste0(base_url, "/storage/v1/object/swap-resources/", safe_filename)
+        upload_res <- httr::POST(
+          url = storage_endpoint,
+          httr::add_headers(apikey = api_key, Authorization = paste("Bearer", user_token), `Content-Type` = mime_type),
+          body = httr::upload_file(input$res_file$datapath, type = mime_type)
+        )
+        
+        if (httr::status_code(upload_res) >= 400) {
+          showNotification("File upload failed. Progress log aborted.", type = "error")
+          return()
+        }
+        public_url <- paste0(base_url, "/storage/v1/object/public/swap-resources/", safe_filename)
+        
+        # Insert Resource into database
+        is_species <- startsWith(input$res_target, "sp_")
+        target_id <- as.integer(gsub("sp_|hab_", "", input$res_target))
+        
+        # We need a flag to stop execution if the DB insert fails
+        resource_success <- TRUE 
+        
+        tryCatch({
+          if(is_species) {
+            # THE FIX: Changed uploaded_by to createdby
+            dbExecute(db, "INSERT INTO track.speciesresources (speciesid, resource_name, resource_type, resource_url, createdby) VALUES ($1, $2, $3, $4, $5)",
+                      params = list(target_id, input$res_name, input$res_type, public_url, current_user()$user_id))
+          } else {
+            # THE FIX: Changed uploaded_by to createdby
+            dbExecute(db, "INSERT INTO track.habitatresources (habitatsubtypeid, resource_name, resource_type, resource_url, createdby) VALUES ($1, $2, $3, $4, $5)",
+                      params = list(target_id, input$res_name, input$res_type, public_url, current_user()$user_id))
+          }
+        }, error = function(e) {
+          # THE FIX: Show the exact SQL error so we know what's wrong!
+          showNotification(paste("Resource DB Error:", e$message), type = "error", duration = 10)
+          resource_success <<- FALSE
+        })
+        
+        # If the resource failed to insert, abort the rest of the progress log
+        if (!resource_success) return() 
+      }
+      
+      # 2. Database Transaction for the Progress Log & Status Update
       tryCatch({
         pool::poolWithTransaction(db, function(conn) {
-          q_insert <- "INSERT INTO track.actiontracking (implementedactionid, actiondate, stattype, stat, comments, createdby) VALUES ($1, $2, $3, $4, $5, $6)"
-          dbExecute(conn, q_insert, params = list(as.integer(selected_row$implementedactionid), as.character(input$action_date), input$stat_type, as.numeric(input$stat_value), input$comments, current_user()$user_id))
+          # Insert Historical Snapshot
+          q_insert <- "INSERT INTO track.actiontracking (implementedactionid, actiondate, implementation_progress, result_progress, what_done, what_learned, what_needed, createdby) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
+          dbExecute(conn, q_insert, params = list(as.integer(selected_row$implementedactionid), as.character(input$action_date), input$upd_impl_prog, input$upd_res_prog, input$what_done, input$what_learned, input$what_needed, current_user()$user_id))
+          
+          # Update Live Action Record
+          q_update <- "UPDATE track.implementedactions SET implementation_progress = $1, result_progress = $2 WHERE implementedactionid = $3"
+          dbExecute(conn, q_update, params = list(input$upd_impl_prog, input$upd_res_prog, as.integer(selected_row$implementedactionid)))
         })
         
         showNotification("Update/Progress successfully recorded!", type = "message", duration = 5)
         
+        # Reset UI
         updateDateInput(session, "action_date", value = Sys.Date())
-        updateNumericInput(session, "stat_value", value = 0)
-        updateTextAreaInput(session, "comments", value = "")
-        bslib::nav_select("update_tabs", "Action Information", session = session)
+        updateTextAreaInput(session, "what_done", value = "")
+        updateTextAreaInput(session, "what_learned", value = "")
+        updateTextAreaInput(session, "what_needed", value = "")
+        updateCheckboxInput(session, "add_resource_check", value = FALSE)
+        updateTextInput(session, "res_name", value = "")
         
         db_sync_trigger(db_sync_trigger() + 1)
         
@@ -360,96 +438,30 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
       selected_row <- action_data()[input$action_table_rows_selected, ]
       hist_df <- action_history()
       
-      warning_msg <- ""
-      
+      # Date Warning Check
       if (nrow(hist_df) > 0) {
         last_date <- as.Date(hist_df$Date[1]) 
-        last_val <- as.numeric(hist_df$Value[1])
         new_date <- as.Date(input$action_date)
-        new_val <- as.numeric(input$stat_value)
-        
         if (new_date <= last_date) {
-          warning_msg <- paste0(warning_msg, "<li>You are logging an update on <b>", new_date, "</b>, which is the same as or prior to the most recent logged date (<b>", last_date, "</b>).</li>")
-        }
-        if (input$stat_type == "Percentage" && new_date > last_date && new_val < last_val) {
-          warning_msg <- paste0(warning_msg, "<li>You are logging a percentage (<b>", new_val, "%</b>) that is <i>lower</i> than the previously logged percentage (<b>", last_val, "%</b>).</li>")
+          showModal(modalDialog(
+            title = "Please Confirm Your Update",
+            HTML(paste0("<p>We noticed a potential discrepancy:</p><ul><li>You are logging an update on <b>", new_date, "</b>, which is the same as or prior to the most recent logged date (<b>", last_date, "</b>).</li></ul><p>Are you sure you want to proceed?</p>")),
+            footer = tagList(
+              tagAppendAttributes(modalButton("Cancel"), style = "color: #333; background-color: #e9ecef; border-color: #ccc;"),
+              actionButton(session$ns("confirm_progress_warning"), "Confirm & Save", class = "btn-warning", style="font-weight: bold;")
+            )
+          ))
+          return()
         }
       }
       
-      if (warning_msg != "") {
-        showModal(modalDialog(
-          title = "Please Confirm Your Update",
-          HTML(paste0("<p>We noticed a potential discrepancy with your update/progress log:</p><ul>", warning_msg, "</ul><p>Are you sure you want to proceed and save this data?</p>")),
-          footer = tagList(
-            tagAppendAttributes(modalButton("Cancel"), style = "color: #333; background-color: #e9ecef; border-color: #ccc;"),
-            actionButton(session$ns("confirm_progress_warning"), "Confirm & Save", class = "btn-warning", style="font-weight: bold;")
-          )
-        ))
-      } else {
-        # If no warnings, save instantly
-        execute_progress_log(selected_row)
-      }
+      execute_progress_log(selected_row)
     })
     
     observeEvent(input$confirm_progress_warning, {
       removeModal()
       req(input$action_table_rows_selected)
-      selected_row <- action_data()[input$action_table_rows_selected, ]
-      execute_progress_log(selected_row)
-    })
-    
-    # --- ACTION SUMMARY FOR STATUS TAB ---
-    output$status_action_summary <- renderUI({
-      req(input$action_table_rows_selected)
-      selected_row <- action_data()[input$action_table_rows_selected, ]
-      
-      div(class = "alert alert-secondary shadow-sm mb-4", style = "border-left: 5px solid #07234C;",
-          h6("You are updating the status for:", class = "alert-heading fw-bold mb-2"),
-          p(class = "mb-1", strong("Action: "), selected_row$Action),
-          p(class = "mb-1", strong("Applied to Targets: "), selected_row$Searchable_Targets),
-          p(class = "mb-0", strong("Timeframe: "), selected_row$Timeframe)
-      )
-    })
-    
-    # SUBMIT STATUS CHANGE
-    observeEvent(input$submit_status, {
-      req(input$action_table_rows_selected)
-      selected_row <- action_data()[input$action_table_rows_selected, ]
-      
-      if (input$new_status == selected_row$Status) {
-        showNotification("The action is already set to this status.", type = "warning")
-        return()
-      }
-      
-      showModal(modalDialog(
-        title = "Confirm Status Change",
-        p(HTML(paste0("You are about to change the overall status of this action from <b>", selected_row$Status, "</b> to <b>", input$new_status, "</b>."))),
-        p("Are you sure you want to proceed? This will update the status for all targets associated with this overarching action."),
-        footer = tagList(
-          tagAppendAttributes(modalButton("Cancel"), style = "color: #333; background-color: #e9ecef; border-color: #ccc;"),
-          actionButton(session$ns("confirm_status_change"), "Confirm & Save", class = "btn-warning", style="font-weight: bold;")
-        )
-      ))
-    })
-    
-    observeEvent(input$confirm_status_change, {
-      removeModal()
-      req(input$action_table_rows_selected)
-      selected_row <- action_data()[input$action_table_rows_selected, ]
-      
-      tryCatch({
-        pool::poolWithTransaction(db, function(conn) {
-          q_update_status <- "UPDATE track.implementedactions SET status = $1 WHERE implementedactionid = $2"
-          dbExecute(conn, q_update_status, params = list(input$new_status, as.integer(selected_row$implementedactionid)))
-        })
-        
-        showNotification("Overall status successfully updated!", type = "message", duration = 5)
-        bslib::nav_select("update_tabs", "Action Information", session = session)
-        db_sync_trigger(db_sync_trigger() + 1)
-        
-      }, error = function(e) {
-        showNotification(paste("Database Error:", e$message), type = "error", duration = 10)
-      })
+      execute_progress_log(action_data()[input$action_table_rows_selected, ])
     })
     
   })
