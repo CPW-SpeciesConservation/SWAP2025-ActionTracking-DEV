@@ -279,3 +279,66 @@ for(tbl in tables_to_extract) {
 
 cat("\nExtraction complete! Check your export folder.\n")
 
+#raster extraction for habitat layers
+library(DBI)
+library(odbc)
+library(sf)
+library(dplyr)
+
+# 1. Connect to SQL Server SDE
+sql_con <- dbConnect(odbc::odbc(),
+                     Driver = "SQL Server", 
+                     Server = "DNRCPWFTCSDE22",
+                     Database = "SWAP",
+                     Trusted_Connection = "True")
+
+# 2. Targeted list of failed habitat tables
+failed_habitats <- c(
+  "FOOTHILL_AND_MOUNTAIN_GRASSLANDS", "MESIC_MIXED_CONIFER", "SALTBUSH", 
+  "PINYON_JUNIPER", "SANDSAGE", "LODGEPOLE", "SPRUCE_FIR", 
+  "LOWER_MONTANE_FOOTHILL_SHRUBLANDS", "DRY_MESIC_MIXED_CONIFER", 
+  "SAND_DUNES", "CLIFF_AND_CANYON", "OAK_AND_MIXED_MOUNTAIN_SHRUB", 
+  "ASPEN", "ALPINE", "GREASEWOOD", "WETLANDS", 
+  "RIPARIAN_WOODLANDS_AND_SHRUBLANDS", "DESERT_SHRUB", "SHORTGRASS_PRAIRIE", 
+  "PONDEROSA_PINE", "MIXED_AND_TALLGRASS_PRAIRIES", "HAY_MEADOWS", 
+  "BARRENS", "SAGEBRUSH", "CROPAGRICULTURE", "URBANAREAS", "BRISTLECONE"
+)
+
+export_dir <- "C:/Users/adamsc/Documents/Projects/SWAP/SQL Database/SWAP_GeoJSONs" # Ensure this folder exists
+
+cat(sprintf("Starting targeted extraction for %d habitat tables...\n", length(failed_habitats)))
+
+for(tbl in failed_habitats) {
+  cat(paste0("Extracting ", tbl, "... "))
+  
+  tryCatch({
+    # We use FOOTPRINT.STAsText() because these are Raster Mosaic tables
+    # We select OID and any other standard fields, but skip the heavy RASTER blob
+    query <- paste0("SELECT OID, FOOTPRINT.STAsText() AS WKT_GEOM FROM dbo.", tbl, " WHERE FOOTPRINT IS NOT NULL")
+    
+    raw_data <- dbGetQuery(sql_con, query)
+    
+    if(nrow(raw_data) == 0) {
+      cat("SKIPPED (No Footprint data found)\n")
+      next
+    }
+    
+    # Convert the Footprint WKT to a spatial object
+    # Footprints in SDE are typically stored in the same projection as the raster
+    geo_data <- raw_data %>%
+      st_as_sf(wkt = "WKT_GEOM", crs = 2232) %>% # Colorado State Plane
+      st_transform(4326) # Web Mercator for Leaflet
+    
+    # Write to GeoJSON
+    file_name <- file.path(export_dir, paste0(tolower(tbl), ".geojson"))
+    st_write(geo_data, file_name, driver = "GeoJSON", delete_dsn = TRUE, quiet = TRUE)
+    
+    cat("Success!\n")
+    
+  }, error = function(e) {
+    cat("FAILED: ", e$message, "\n")
+  })
+}
+
+dbDisconnect(sql_con)
+cat("\nTargeted Habitat Extraction Complete.\n")
