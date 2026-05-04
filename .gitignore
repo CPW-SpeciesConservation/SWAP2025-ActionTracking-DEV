@@ -5,6 +5,7 @@
 # Session Data files
 .RData
 .RDataTmp
+RangeMapProcessing_geojsonConversion.R
 
 # User-specific files
 .Ruserdata
