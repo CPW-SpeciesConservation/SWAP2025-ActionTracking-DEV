@@ -178,7 +178,7 @@ dashboard_ui <- function(id) {
       # TAB 3: ALL ACTIONS interactive table
       nav_panel("All Actions List",
                 fluidRow(
-                  column(width = 4,
+                  column(width = 5,
                          div(class = "card shadow-sm mb-3",
                              div(class = "card-header text-white", style = "background-color: #055A53;", "Tracked Actions"),
                              div(class = "card-body",
@@ -186,7 +186,7 @@ dashboard_ui <- function(id) {
                              )
                          )
                   ),
-                  column(width = 8,
+                  column(width = 7,
                          conditionalPanel(
                            condition = sprintf("input['%s'] == null", ns("all_actions_table_rows_selected")),
                            div(class = "card shadow-sm", style = "background-color: #FAFAFA; border: 2px dashed #CCCCCC;",
@@ -381,10 +381,27 @@ dashboard_server <- function(id, db, db_sync_trigger) {
     
     output$targ_threats_ui <- renderUI({
       req(input$target_actions_table_rows_selected); sha_id <- targ_actions_data()[input$target_actions_table_rows_selected, "specieshabitatactionsid"]
-      q <- "SELECT l2.threatl2code || '. ' || l2.threatl2name AS t_name, ta.justification FROM track.threatsaddressed ta JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id WHERE sha.specieshabitatactionsid = $1"
+      q <- "SELECT l2.threatl2id, l2.threatl2code || '. ' || l2.threatl2name AS t_name, ta.justification, ta.alternative_category, ta.justification_text
+            FROM track.threatsaddressed ta 
+            JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid 
+            JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id 
+            WHERE sha.specieshabitatactionsid = $1"
       threats <- dbGetQuery(db, q, params = list(as.integer(sha_id)))
       if(nrow(threats) == 0) return(p("No threats recorded."))
-      tags$ul(class = "ps-3 mb-0", lapply(1:nrow(threats), function(i) tags$li(strong(threats$t_name[i]), br(), em(threats$justification[i]), class="mb-3")))
+      
+      tags$ul(class = "ps-3 mb-0", lapply(1:nrow(threats), function(i) {
+        if (threats$threatl2id[i] == 59) {
+          tags$li(
+            strong("Broader Conservation Goal:", style = "color: #0D67B8;"), # Primary Blue
+            span(style = "font-weight: bold; margin-left: 5px;", threats$alternative_category[i]),
+            br(), 
+            em(ifelse(is.na(threats$justification_text[i]) | trimws(threats$justification_text[i])=="", "No details provided.", threats$justification_text[i])), 
+            class="mb-3"
+          )
+        } else {
+          tags$li(strong(threats$t_name[i]), br(), em(ifelse(is.na(threats$justification[i]) | trimws(threats$justification[i])=="", "No justification provided.", threats$justification[i])), class="mb-3")
+        }
+      }))
     })
     
     output$targ_other_targets_ui <- renderUI({
@@ -507,8 +524,11 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       impl_id <- act_targets_data()[input$action_targets_table_rows_selected, "implementedactionid"]
       
       q <- "SELECT 
+              l2.threatl2id,
               l2.threatl2code || '. ' || l2.threatl2name AS t_name, 
               ta.justification,
+              ta.alternative_category,
+              ta.justification_text,
               STRING_AGG(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END, ', ') AS target_labels
             FROM track.threatsaddressed ta 
             JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid 
@@ -516,21 +536,33 @@ dashboard_server <- function(id, db, db_sync_trigger) {
             LEFT JOIN proj.species s ON sha.speciesid = s.speciesid
             LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid
             WHERE sha.implementedactionid = $1
-            GROUP BY l2.threatl2code, l2.threatl2name, ta.justification
+            GROUP BY l2.threatl2id, l2.threatl2code, l2.threatl2name, ta.justification, ta.alternative_category, ta.justification_text
             ORDER BY t_name ASC"
       
       threats <- dbGetQuery(db, q, params = list(as.integer(impl_id)))
       if(nrow(threats) == 0) return(p("No threats recorded."))
       
       tags$ul(class = "ps-3 mb-0", lapply(1:nrow(threats), function(i) {
-        tags$li(
-          strong(threats$t_name[i]), 
-          br(),
-          span(style="color: #0D67B8; font-size: 0.9em; font-weight: bold;", paste0("[", threats$target_labels[i], "]")),
-          br(), 
-          em(ifelse(is.na(threats$justification[i]) | trimws(threats$justification[i])=="", "No justification provided.", threats$justification[i])), 
-          class="mb-3"
-        )
+        if (threats$threatl2id[i] == 59) {
+          tags$li(
+            strong("Broader Conservation Goal:", style = "color: #0D67B8;"),
+            span(style = "font-weight: bold; margin-left: 5px;", threats$alternative_category[i]),
+            br(),
+            span(style="color: #055A53; font-size: 0.9em; font-weight: bold;", paste0("[", threats$target_labels[i], "]")),
+            br(), 
+            em(ifelse(is.na(threats$justification_text[i]) | trimws(threats$justification_text[i])=="", "No details provided.", threats$justification_text[i])), 
+            class="mb-3"
+          )
+        } else {
+          tags$li(
+            strong(threats$t_name[i]), 
+            br(),
+            span(style="color: #055A53; font-size: 0.9em; font-weight: bold;", paste0("[", threats$target_labels[i], "]")),
+            br(), 
+            em(ifelse(is.na(threats$justification[i]) | trimws(threats$justification[i])=="", "No justification provided.", threats$justification[i])), 
+            class="mb-3"
+          )
+        }
       }))
     })
     
@@ -592,12 +624,27 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       db_sync_trigger()
       q <- "SELECT 
               ia.implementedactionid, 
+              TO_CHAR(ia.createdon, 'MM/DD/YY') AS \"Date Submitted\",
               l2.actionl2name AS \"Level 2 Action\", 
-              ia.timeframe AS \"Timeframe\", 
+              CASE 
+                WHEN tgts.t_count = 1 THEN tgts.first_targ
+                WHEN tgts.t_count > 1 THEN 'Multiple'
+                ELSE 'None'
+              END AS \"Species/Habitat\",
               ia.status AS \"Status\",
               ia.actiondesc
             FROM track.implementedactions ia 
             JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id 
+            LEFT JOIN (
+              SELECT 
+                sha.implementedactionid,
+                COUNT(sha.specieshabitatactionsid) AS t_count,
+                MAX(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END) AS first_targ
+              FROM track.specieshabitatactions sha
+              LEFT JOIN proj.species s ON sha.speciesid = s.speciesid
+              LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid
+              GROUP BY sha.implementedactionid
+            ) tgts ON ia.implementedactionid = tgts.implementedactionid
             ORDER BY CASE WHEN ia.status = 'Completed' THEN 1 WHEN ia.status = 'In Progress' THEN 2 WHEN ia.status = 'Planned' THEN 3 ELSE 4 END ASC, ia.createdon DESC"
       dbGetQuery(db, q)
     })
@@ -609,8 +656,9 @@ dashboard_server <- function(id, db, db_sync_trigger) {
         scrollY = "calc(100vh - 250px)",        
         scrollCollapse = TRUE,   
         info = FALSE,
-        # HIDE: ID(0), actiondesc(4)
-        columnDefs = list(list(visible = F, targets = c(0, 4)))))
+        # HIDE: ID (index 0) and actiondesc (now index 5 because Timeframe was removed)
+        columnDefs = list(list(visible = F, targets = c(0, 5)))
+      ))
     })
     
     # UI: Description Card for Tab 3
@@ -639,8 +687,11 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       impl_id <- all_actions_data()[input$all_actions_table_rows_selected, "implementedactionid"]
       
       q <- "SELECT 
+              l2.threatl2id,
               l2.threatl2code || '. ' || l2.threatl2name AS t_name, 
               ta.justification,
+              ta.alternative_category,
+              ta.justification_text,
               STRING_AGG(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END, ', ') AS target_labels
             FROM track.threatsaddressed ta 
             JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid 
@@ -648,21 +699,33 @@ dashboard_server <- function(id, db, db_sync_trigger) {
             LEFT JOIN proj.species s ON sha.speciesid = s.speciesid
             LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid
             WHERE sha.implementedactionid = $1
-            GROUP BY l2.threatl2code, l2.threatl2name, ta.justification
+            GROUP BY l2.threatl2id, l2.threatl2code, l2.threatl2name, ta.justification, ta.alternative_category, ta.justification_text
             ORDER BY t_name ASC"
       
       res <- dbGetQuery(db, q, params = list(as.integer(impl_id)))
       if(nrow(res) == 0) return(p("No threats recorded."))
       
       tags$ul(class = "ps-3 mb-0", lapply(1:nrow(res), function(i) {
-        tags$li(
-          strong(res$t_name[i]), 
-          br(),
-          span(style="color: #0D67B8; font-size: 0.9em; font-weight: bold;", paste0("[", res$target_labels[i], "]")),
-          br(), 
-          em(ifelse(is.na(res$justification[i]) | trimws(res$justification[i])=="", "No justification provided.", res$justification[i])), 
-          class="mb-3"
-        )
+        if (res$threatl2id[i] == 59) {
+          tags$li(
+            strong("Broader Conservation Goal:", style = "color: #0D67B8;"),
+            span(style = "font-weight: bold; margin-left: 5px;", res$alternative_category[i]),
+            br(),
+            span(style="color: #055A53; font-size: 0.9em; font-weight: bold;", paste0("[", res$target_labels[i], "]")),
+            br(), 
+            em(ifelse(is.na(res$justification_text[i]) | trimws(res$justification_text[i])=="", "No details provided.", res$justification_text[i])), 
+            class="mb-3"
+          )
+        } else {
+          tags$li(
+            strong(res$t_name[i]), 
+            br(),
+            span(style="color: #055A53; font-size: 0.9em; font-weight: bold;", paste0("[", res$target_labels[i], "]")),
+            br(), 
+            em(ifelse(is.na(res$justification[i]) | trimws(res$justification[i])=="", "No justification provided.", res$justification[i])), 
+            class="mb-3"
+          )
+        }
       }))
     })
     
