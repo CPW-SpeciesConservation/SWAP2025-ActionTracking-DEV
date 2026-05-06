@@ -13,10 +13,15 @@ library(visNetwork)
 library(igraph)
 library(ggraph)
 library(heatmaply)
+library(leaflet)
+library(leaflet.extras)
+library(sf)
+library(jsonlite)
 
 # Source all helpers and modules
 source("R/db_connections.R")
 source("R/dashboard.R")
+source("R/resource_library.R") # 1. ADDED SOURCE
 source("R/profile.R")
 source("R/add_action.R")
 source("R/update_action.R")
@@ -24,7 +29,6 @@ source("R/auth.R")
 source("R/admin.R")
 source("R/add_resource.R")
 
-# Cleaned up theme! We removed the inline bs_add_rules because your custom_styles.css handles it now.
 cpw_theme <- bs_theme(
   version = 5, bg = "#FFFFFF", fg = "#212529", primary = "#0D67B8", 
   secondary = "#ECE8E4", success = "#055A53", warning = "#EAB11E", danger = "#AA5F40", 
@@ -66,13 +70,11 @@ ui <- page_navbar(
   ),
   
   nav_panel_hidden(value = "dashboard", dashboard_ui("dashboard")),
+  nav_panel_hidden(value = "resource_library", resource_library_ui("res_lib")), # 2. MOUNTED UI
   nav_panel_hidden(value = "login", auth_ui("auth")), 
   nav_panel_hidden(value = "add_action", add_action_ui("add_action")),
   nav_panel_hidden(value = "update_action", update_action_ui("update_action")),
-  
-  # THE FIX: Proper bslib hidden nav panel for the new module
   nav_panel_hidden(value = "add_resource", add_resource_ui("add_resource")),
-  
   nav_panel_hidden(value = "profile", profile_ui("profile"))
 )
 
@@ -105,26 +107,26 @@ server <- function(input, output, session) {
   onStop(function() { pool::poolClose(db) })
   
   dashboard_server("dashboard", db, db_sync_trigger)
+  resource_library_server("res_lib", db, db_sync_trigger) # 3. CALLED SERVER
   auth_server("auth", db, current_user) 
   profile_triggers <- profile_server("profile", db, current_user, db_sync_trigger)
   add_triggers <- add_action_server("add_action", db, current_user, db_sync_trigger)
   update_action_server("update_action", db, current_user, db_sync_trigger)
-  
-  # THE FIX: Added the server call for the new module
   add_resource_server("add_resource", db, current_user)
   
   output$dynamic_sidebar <- renderUI({
     if (is.null(current_user())) {
       tagList(
         actionButton("nav_dash", "Dashboard", class = "sidebar-btn"),
+        actionButton("nav_res_lib", "Resource Library", class = "sidebar-btn"), # 4. ADDED BUTTON
         actionButton("nav_login", "Login / Register", class = "sidebar-btn")
       )
     } else {
       tagList(
         actionButton("nav_dash", "Dashboard", class = "sidebar-btn"),
+        actionButton("nav_res_lib", "Resource Library", class = "sidebar-btn"), # 4. ADDED BUTTON
         actionButton("nav_add", "Report New Action", class = "sidebar-btn"),
         actionButton("nav_update", "Update Existing Action", class = "sidebar-btn"),
-        # THE FIX: Added the new sidebar button for authenticated users
         actionButton("nav_add_resource", "Add Resources", class = "sidebar-btn"),
         actionButton("nav_profile", "My Profile", class = "sidebar-btn")
       )
@@ -135,10 +137,11 @@ server <- function(input, output, session) {
   output$nav_styles <- renderUI({
     active_btn <- switch(input$main_nav,
                          "dashboard" = "#nav_dash",
+                         "resource_library" = "#nav_res_lib", # 5. MAPPED CSS
                          "login"="#nav_login",
                          "add_action" = "#nav_add",
                          "update_action" = "#nav_update",
-                         "add_resource" = "#nav_add_resource", # THE FIX: Ensure the new button gets highlighted
+                         "add_resource" = "#nav_add_resource", 
                          "profile" = "#nav_profile"
     )
     
@@ -151,6 +154,8 @@ server <- function(input, output, session) {
   })
   
   observeEvent(input$nav_dash, { nav_select("main_nav", "dashboard") })
+  
+  observeEvent(input$nav_res_lib, { nav_select("main_nav", "resource_library") }) # 6. CLICK LISTENER
   
   observe({
     req(add_triggers)
@@ -181,7 +186,6 @@ server <- function(input, output, session) {
     nav_select("main_nav", "update_action")
   })
   
-  # THE FIX: Added navigation logic for the new button
   observeEvent(input$nav_add_resource, {
     req(current_user())
     nav_select("main_nav", "add_resource")

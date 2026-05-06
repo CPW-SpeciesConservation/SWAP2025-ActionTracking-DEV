@@ -8,6 +8,8 @@ library(dplyr)
 library(igraph)
 library(ggraph)
 library(heatmaply)
+library(leaflet)
+library(sf)
 
 # "global" cache of track schema data
 global_db_cache <- cachem::cache_mem(max_age = 3600)
@@ -25,11 +27,9 @@ get_dash_l0_actions <- memoise(function(db) {
 }, cache = global_db_cache)
 
 
-
 dashboard_ui <- function(id) {
   ns <- NS(id)
   tagList(
-    
     tags$head(
       tags$style(HTML("
         .nav-pills .nav-link { 
@@ -51,249 +51,183 @@ dashboard_ui <- function(id) {
     navset_underline(
       id = ns("dash_tabs"),
       
+      # ==================================================
       # TAB 1: EXPLORE BY Species/Habitat
+      # ==================================================
       nav_panel("Explore by Species/Habitat", 
-                fluidRow(
-                  column(width = 4,
-                         div(class = "card shadow-sm mb-3",
-                             div(class = "card-header text-white", style = "background-color: #055A53;", "Select Species/Habitat"),
-                             div(class = "card-body",
-                                 radioButtons(ns("targ_type"), "Type:", choices = c("Species", "Habitat"), inline = TRUE),
-                                 conditionalPanel(
-                                   condition = sprintf("input['%s'] == 'Species'", ns("targ_type")),
-                                   selectizeInput(ns("dash_tax_group"), "Taxonomic Group", choices = c("Loading..." = ""),options = list(dropdownParent = "body")),
-                                   selectizeInput(ns("dash_species"), "Species", choices = c("Select a group first..." = ""),options = list(dropdownParent = "body"))
-                                 ),
-                                 conditionalPanel(
-                                   condition = sprintf("input['%s'] == 'Habitat'", ns("targ_type")),
-                                   selectizeInput(ns("dash_major_hab"), "Major Habitat", choices = c("Loading..." = ""),options = list(dropdownParent = "body")),
-                                   selectizeInput(ns("dash_habitat"), "Habitat Subtype", choices = c("Select a major habitat first..." = ""),options = list(dropdownParent = "body"))
-                                 ),
-                                 hr(class = "my-4"),
-                                 h6("Tracked Actions for Selected Species/Habitat", class = "fw-bold text-muted"),
-                                 DTOutput(ns("target_actions_table"))
-                             )
-                         )
-                  ),
-                  column(width = 8,
-                         conditionalPanel(
-                           condition = sprintf("input['%s'] == null", ns("target_actions_table_rows_selected")),
-                           div(class = "card shadow-sm", style = "background-color: #FAFAFA; border: 2px dashed #CCCCCC;",
-                               div(class = "card-body text-center text-muted", style = "padding: 120px 20px;",
-                                   h4("Select an action on the left to view its progress.")
-                               )
-                           )
-                         ),
-                         conditionalPanel(
-                           condition = sprintf("input['%s'] != null", ns("target_actions_table_rows_selected")),
-                           fluidRow( 
-                             column(width = 7,
-                                    div(class = "card shadow-sm",
-                                        div(class = "card-header text-white fw-bold", style = "background-color: #07234C;", "Progress Updates"),
-                                        div(class = "card-body", 
-                                            uiOutput(ns("targ_results_chain_ui")),
-                                            hr(),
-                                            uiOutput(ns("targ_updates_list"))
-                                        )
-                                    )
-                             ),
-                             column(width = 5,
-                                    div(class = "card shadow-sm mb-3",
-                                        div(class = "card-header text-white fw-bold", style = "background-color: #0D67B8;", "Description"),
-                                        div(class = "card-body", uiOutput(ns("targ_desc_ui")))
-                                    ),
-                                    div(class = "card shadow-sm mb-3",
-                                        div(class = "card-header bg-secondary text-dark fw-bold", "Mitigated Threats"),
-                                        div(class = "card-body", uiOutput(ns("targ_threats_ui")))
-                                    ),
-                                    div(class = "card shadow-sm",
-                                        div(class = "card-header text-white fw-bold", style = "background-color: #AA5F40;", "Other Species/Habitats targeted by this Action"),
-                                        div(class = "card-body", uiOutput(ns("targ_other_targets_ui")))
-                                    )
-                             )
-                           )
-                         )
-                  )
-                )
-      ),
-      
-      # TAB 2: EXPLORE BY ACTION
-      nav_panel("Explore by Action",
-                fluidRow(
-                  column(width = 4,
-                         div(class = "card shadow-sm mb-3",
-                             div(class = "card-header text-white", style = "background-color: #055A53;", "Select Action"),
-                             div(class = "card-body",
-                                 selectizeInput(ns("dash_l0"), "Level 0 Category", choices = c("Loading..." = ""),options = list(dropdownParent = "body")),
-                                 selectizeInput(ns("dash_l1"), "Level 1 Category", choices = c("Select Level 0 first..." = ""),options = list(dropdownParent = "body")),
-                                 selectizeInput(ns("dash_l2"), "Level 2 Action", choices = c("Select Level 1 first..." = ""),options = list(dropdownParent = "body")),
-                                 hr(class = "my-4"),
-                                 DTOutput(ns("action_targets_table"))
-                             )
-                         )
-                  ),
-                  column(width = 8,
-                         conditionalPanel(
-                           condition = sprintf("input['%s'] == null", ns("action_targets_table_rows_selected")),
-                           div(class = "card shadow-sm", style = "background-color: #FAFAFA; border: 2px dashed #CCCCCC;",
-                               div(class = "card-body text-center text-muted", style = "padding: 120px 20px;",
-                                   h4("Select a target on the left to view its progress.")
-                               )
-                           )
-                         ),
-                         conditionalPanel(
-                           condition = sprintf("input['%s'] != null", ns("action_targets_table_rows_selected")),
-                           fluidRow( 
-                             column(width = 7,
-                                    div(class = "card shadow-sm",
-                                        div(class = "card-header text-white fw-bold", style = "background-color: #07234C;", "Progress Updates"),
-                                        div(class = "card-body", 
-                                            uiOutput(ns("act_results_chain_ui")),
-                                            hr(),
-                                            uiOutput(ns("act_updates_list"))
-                                        )
-                                    )
-                             ),
-                             column(width = 5,
-                                    div(class = "card shadow-sm mb-3",
-                                        div(class = "card-header text-white fw-bold", style = "background-color: #0D67B8;", "Description"),
-                                        div(class = "card-body", uiOutput(ns("act_desc_ui")))
-                                    ),
-                                    div(class = "card shadow-sm mb-3",
-                                        div(class = "card-header bg-secondary text-dark fw-bold", "Mitigated Threats"),
-                                        div(class = "card-body", uiOutput(ns("act_threats_ui")))
-                                    ),
-                                    div(class = "card shadow-sm",
-                                        div(class = "card-header text-white fw-bold", style = "background-color: #AA5F40;", "Species/Habitats targeted by this Action"),
-                                        div(class = "card-body", uiOutput(ns("act_other_targets_ui")))
-                                    )
-                             )
-                           )
-                         )
-                  )
-                )
-      ),
-      
-      
-      # TAB 3: ALL ACTIONS interactive table
-      nav_panel("All Actions List",
-                fluidRow(
-                  column(width = 5,
-                         div(class = "card shadow-sm mb-3",
-                             div(class = "card-header text-white", style = "background-color: #055A53;", "Tracked Actions"),
-                             div(class = "card-body",
-                                 DTOutput(ns("all_actions_table"))
-                             )
-                         )
-                  ),
-                  column(width = 7,
-                         conditionalPanel(
-                           condition = sprintf("input['%s'] == null", ns("all_actions_table_rows_selected")),
-                           div(class = "card shadow-sm", style = "background-color: #FAFAFA; border: 2px dashed #CCCCCC;",
-                               div(class = "card-body text-center text-muted", style = "padding: 120px 20px;",
-                                   h4("Select an action on the left to view its details.")
-                               )
-                           )
-                         ),
-                         conditionalPanel(
-                           condition = sprintf("input['%s'] != null", ns("all_actions_table_rows_selected")),
-                           fluidRow(
-                             column(width = 6,
-                                    div(class = "card shadow-sm mb-3",
-                                        div(class = "card-header text-white fw-bold", style = "background-color: #0D67B8;", "Description"),
-                                        div(class = "card-body", uiOutput(ns("all_act_desc_ui")))
-                                    ),
-                                    
-                                    div(class = "card shadow-sm mb-3",
-                                        div(class = "card-header text-white fw-bold", style = "background-color: #AA5F40;", "Mitigated Threats"),
-                                        div(class = "card-body", uiOutput(ns("all_act_threats_ui")))
-                                    ),
-                                    
-                                    div(class = "card shadow-sm mb-3",
-                                        div(class = "card-header text-white fw-bold", style = "background-color: #0D67B8;", "Targeted Species & Habitats"),
-                                        div(class = "card-body", uiOutput(ns("all_act_targets_ui")))
-                                    )
-                                   
-                             ),
-                             column(width = 6,
-                                    div(class = "card shadow-sm mb-3",
-                                        div(class = "card-header text-white fw-bold", style = "background-color: #EAB11E;", "Most Recent Update"),
-                                        div(class = "card-body", uiOutput(ns("all_act_recent_update_ui")))
-                                    )
-                             )
-                           )
-                         )
-                  )
-                )
-      ),
-      
-      # TAB 4: Visulization
-      nav_panel("Visualizing Actions, Species/Habitats, & Threats Connections",
-                div(class = "mt-3",
-                    div(class = "card shadow-sm mb-4",
-                        div(class = "card-header text-white", style = "background-color: #AA5F40;", "Filters and Figures"),
-                        div(class = "card-body",
-                            layout_columns(
-                              selectInput(ns("conn_filter_type"), "Filter:", choices = c("All", "Species Only", "Habitats Only")),
-                              radioButtons(ns("conn_chart_choice"), "Select Visualization:", 
-                                           choices = c("Sankey Chart" = "sankey", 
-                                                       "Chord Graph" = "bipartite",
-                                                       "Heatmap" = "heatmap"), 
-                                           inline = TRUE)
-                            ),
-                            p(em("Visualize exactly how Conservation Actions flow through specific Species/Habitats to mitigate Threats.", class="text-muted small"))
-                        )
-                    ),
-                    div(class = "card shadow-sm",
-                        div(class = "card-body", style = "min-height: 750px; display: flex; justify-content: center; overflow: hidden;",
-                            
-                            conditionalPanel(
-                              condition = sprintf("input['%s'] == 'sankey'", ns("conn_chart_choice")),
-                              plotlyOutput(ns("sankey_plot"), height = "700px", width = "100%")
-                            ),
-                            
-                            conditionalPanel(
-                              condition = sprintf("input['%s'] == 'bipartite'", ns("conn_chart_choice")),
-                              girafeOutput(ns("bipartite_plot"), width = "100%", height = "750px")
-                            ),
-                            
-                            conditionalPanel(
-                              condition = sprintf("input['%s'] == 'heatmap'", ns("conn_chart_choice")),
-                              plotlyOutput(ns("heatmap_plot"), height = "700px", width = "100%")
-                            )
-                        )
-                    )
-                )
-      ),
-      # TAB 5: RESOURCE LIBRARY
-      nav_panel("Resource Library",
                 fluidRow(class="mt-3",
                          column(width = 4,
                                 div(class = "card shadow-sm mb-3",
-                                    div(class = "card-header text-white", style = "background-color: #055A53;", "Search Library"),
+                                    div(class = "card-header text-white", style = "background-color: #055A53;", "Select Species/Habitat"),
                                     div(class = "card-body",
-                                        radioButtons(ns("res_type"), "Search By:", choices = c("Species", "Habitat"), inline = TRUE),
+                                        radioButtons(ns("targ_type"), "Type:", choices = c("Species", "Habitat"), inline = TRUE),
                                         conditionalPanel(
-                                          condition = sprintf("input['%s'] == 'Species'", ns("res_type")),
-                                          selectizeInput(ns("res_tax_group"), "Taxonomic Group", choices = c("Loading..." = ""),options = list(dropdownParent = "body")),
-                                          selectizeInput(ns("res_species"), "Species", choices = c("Select a group first..." = ""),options = list(dropdownParent = "body"))
+                                          condition = sprintf("input['%s'] == 'Species'", ns("targ_type")),
+                                          selectizeInput(ns("dash_tax_group"), "Taxonomic Group", choices = c("Loading..." = ""),options = list(dropdownParent = "body")),
+                                          selectizeInput(ns("dash_species"), "Species", choices = c("Select a group first..." = ""),options = list(dropdownParent = "body"))
                                         ),
                                         conditionalPanel(
-                                          condition = sprintf("input['%s'] == 'Habitat'", ns("res_type")),
-                                          selectizeInput(ns("res_major_hab"), "Major Habitat", choices = c("Loading..." = ""),options = list(dropdownParent = "body")),
-                                          selectizeInput(ns("res_habitat"), "Habitat Subtype", choices = c("Select a major habitat first..." = ""),options = list(dropdownParent = "body"))
-                                        )
+                                          condition = sprintf("input['%s'] == 'Habitat'", ns("targ_type")),
+                                          selectizeInput(ns("dash_major_hab"), "Major Habitat", choices = c("Loading..." = ""),options = list(dropdownParent = "body")),
+                                          selectizeInput(ns("dash_habitat"), "Habitat Subtype", choices = c("Select a major habitat first..." = ""),options = list(dropdownParent = "body"))
+                                        ),
+                                        hr(class = "my-4"),
+                                        h6("Tracked Actions for Selected Species/Habitat", class = "fw-bold text-muted"),
+                                        DTOutput(ns("target_actions_table"))
                                     )
                                 )
                          ),
                          column(width = 8,
-                                div(class = "card shadow-sm",
-                                    div(class = "card-header text-white fw-bold", style = "background-color: #0D67B8;", "Available Resources"),
-                                    div(class = "card-body", style = "min-height: 300px;",
-                                        uiOutput(ns("res_library_content"))
+                                conditionalPanel(
+                                  condition = sprintf("input['%s'] == null", ns("target_actions_table_rows_selected")),
+                                  div(class = "card shadow-sm", style = "background-color: #FAFAFA; border: 2px dashed #CCCCCC;",
+                                      div(class = "card-body text-center text-muted", style = "padding: 120px 20px;", h4("Select an action on the left to view its workspace."))
+                                  )
+                                ),
+                                conditionalPanel(
+                                  condition = sprintf("input['%s'] != null", ns("target_actions_table_rows_selected")),
+                                  navset_underline(
+                                    id = ns("targ_nav_tabs"),
+                                    nav_panel("Overview", value = "overview",
+                                              div(class="mt-3", layout_columns(
+                                                div(
+                                                  div(class = "card shadow-sm mb-3", div(class = "card-header text-white fw-bold", style = "background-color: #0D67B8;", "Description"), div(class = "card-body", uiOutput(ns("targ_desc_ui")))),
+                                                  div(class = "card shadow-sm mb-3", div(class = "card-header text-white fw-bold", style = "background-color: #AA5F40;", "Other Species/Habitats targeted by this Action"), div(class = "card-body", uiOutput(ns("targ_other_targets_ui"))))
+                                                ),
+                                                div(class = "card shadow-sm mb-3", div(class = "card-header bg-secondary text-dark fw-bold", "Mitigated Threats"), div(class = "card-body", uiOutput(ns("targ_threats_ui"))))
+                                              ))
+                                    ),
+                                    nav_panel("Progress Logs", value = "logs",
+                                              div(class="mt-3", div(class = "card shadow-sm mb-3", div(class = "card-header text-white fw-bold", style = "background-color: #07234C;", "Results Chain"), div(class = "card-body", uiOutput(ns("targ_results_chain_ui")))),
+                                                  div(class = "card shadow-sm", div(class = "card-header text-white fw-bold", style = "background-color: #055A53;", "History"), div(class = "card-body", uiOutput(ns("targ_updates_list")))))
+                                    ),
+                                    nav_panel("Spatial Footprint", value = "spatial",
+                                              div(class="mt-3 card shadow-sm", div(class="card-body",
+                                                                                   layout_columns(
+                                                                                     div(class="p-2 text-center rounded border", style="background-color: #F8F9FA;", h6("Scale Category", class="text-muted mb-0"), h5(textOutput(ns("targ_map_scale")), class="mb-0 fw-bold", style="color:#0D67B8;")),
+                                                                                     div(class="p-2 text-center rounded border", style="background-color: #F8F9FA;", h6("Approx. Area", class="text-muted mb-0"), h5(textOutput(ns("targ_map_area")), class="mb-0 fw-bold", style="color:#055A53;"))
+                                                                                   ),
+                                                                                   div(class="mt-3 border rounded", leafletOutput(ns("targ_map"), height="500px"))
+                                              )))
+                                  )
+                                )
+                         )
+                )
+      ),
+      
+      # ==================================================
+      # TAB 2: EXPLORE BY ACTION
+      # ==================================================
+      nav_panel("Explore by Action",
+                fluidRow(class="mt-3",
+                         column(width = 4,
+                                div(class = "card shadow-sm mb-3",
+                                    div(class = "card-header text-white", style = "background-color: #055A53;", "Select Action"),
+                                    div(class = "card-body",
+                                        selectizeInput(ns("dash_l0"), "Level 0 Category", choices = c("Loading..." = ""),options = list(dropdownParent = "body")),
+                                        selectizeInput(ns("dash_l1"), "Level 1 Category", choices = c("Select Level 0 first..." = ""),options = list(dropdownParent = "body")),
+                                        selectizeInput(ns("dash_l2"), "Level 2 Action", choices = c("Select Level 1 first..." = ""),options = list(dropdownParent = "body")),
+                                        hr(class = "my-4"),
+                                        DTOutput(ns("action_targets_table"))
+                                    )
+                                )
+                         ),
+                         column(width = 8,
+                                conditionalPanel(
+                                  condition = sprintf("input['%s'] == null", ns("action_targets_table_rows_selected")),
+                                  div(class = "card shadow-sm", style = "background-color: #FAFAFA; border: 2px dashed #CCCCCC;",
+                                      div(class = "card-body text-center text-muted", style = "padding: 120px 20px;", h4("Select a target on the left to view its workspace."))
+                                  )
+                                ),
+                                conditionalPanel(
+                                  condition = sprintf("input['%s'] != null", ns("action_targets_table_rows_selected")),
+                                  navset_underline(
+                                    id = ns("act_nav_tabs"),
+                                    nav_panel("Overview", value = "overview",
+                                              div(class="mt-3", layout_columns(
+                                                div(
+                                                  div(class = "card shadow-sm mb-3", div(class = "card-header text-white fw-bold", style = "background-color: #0D67B8;", "Description"), div(class = "card-body", uiOutput(ns("act_desc_ui")))),
+                                                  div(class = "card shadow-sm mb-3", div(class = "card-header text-white fw-bold", style = "background-color: #AA5F40;", "Species/Habitats targeted by this Action"), div(class = "card-body", uiOutput(ns("act_other_targets_ui"))))
+                                                ),
+                                                div(class = "card shadow-sm mb-3", div(class = "card-header bg-secondary text-dark fw-bold", "Mitigated Threats"), div(class = "card-body", uiOutput(ns("act_threats_ui"))))
+                                              ))
+                                    ),
+                                    nav_panel("Progress Logs", value = "logs",
+                                              div(class="mt-3", div(class = "card shadow-sm mb-3", div(class = "card-header text-white fw-bold", style = "background-color: #07234C;", "Results Chain"), div(class = "card-body", uiOutput(ns("act_results_chain_ui")))),
+                                                  div(class = "card shadow-sm", div(class = "card-header text-white fw-bold", style = "background-color: #055A53;", "History"), div(class = "card-body", uiOutput(ns("act_updates_list")))))
+                                    ),
+                                    nav_panel("Spatial Footprint", value = "spatial",
+                                              div(class="mt-3 card shadow-sm", div(class="card-body",
+                                                                                   layout_columns(
+                                                                                     div(class="p-2 text-center rounded border", style="background-color: #F8F9FA;", h6("Scale Category", class="text-muted mb-0"), h5(textOutput(ns("act_map_scale")), class="mb-0 fw-bold", style="color:#0D67B8;")),
+                                                                                     div(class="p-2 text-center rounded border", style="background-color: #F8F9FA;", h6("Approx. Area", class="text-muted mb-0"), h5(textOutput(ns("act_map_area")), class="mb-0 fw-bold", style="color:#055A53;"))
+                                                                                   ),
+                                                                                   div(class="mt-3 border rounded", leafletOutput(ns("act_map"), height="500px"))
+                                              )))
+                                  )
+                                )
+                         )
+                )
+      ),
+      
+      # ==================================================
+      # TAB 3: ALL ACTIONS 
+      # ==================================================
+      nav_panel("All Actions List",
+                fluidRow(class="mt-3",
+                         column(width = 12,
+                                div(class = "card shadow-sm mb-3 border-0",
+                                    div(class = "card-header text-white", style = "background-color: #055A53;", "Tracked Actions"),
+                                    div(class = "card-body",
+                                        p(class="text-muted", "Click on any row to open the full Read-Only profile for that action."),
+                                        DTOutput(ns("all_actions_table"))
                                     )
                                 )
                          )
+                )
+      ),
+      
+      # ==================================================
+      # TAB 4: VISUALIZATIONS (REFACTORED)
+      # ==================================================
+      nav_panel("Explore Action/Threat Connections",
+                div(class = "mt-3",
+                    layout_columns(
+                      div(class = "card shadow-sm mb-3",
+                          div(class = "card-body p-3",
+                              selectInput(ns("conn_filter_type"), "Filter Network By Target Type:", choices = c("All", "Species Only", "Habitats Only"), width = "100%")
+                          )
+                      ),
+                      div(class = "d-flex align-items-center h-100", p(em("Visualize exactly how Conservation Actions flow through specific Species/Habitats to mitigate Threats.", class="text-muted small mb-0")))
+                    ),
+                    
+                    navset_underline(
+                      id = ns("conn_nav_tabs"),
+                      
+                      nav_panel("Sankey Chart", value = "sankey", 
+                                div(class = "card shadow-sm mt-3 border-0", 
+                                    div(class = "card-body", style = "min-height: 750px; overflow: hidden;", 
+                                        plotlyOutput(ns("sankey_plot"), height = "700px", width = "100%")
+                                    )
+                                )
+                      ),
+                      
+                      nav_panel("Chord Graph", value = "bipartite", 
+                                div(class = "card shadow-sm mt-3 border-0", 
+                                    div(class = "card-body", style = "min-height: 750px; overflow: hidden;", 
+                                        girafeOutput(ns("bipartite_plot"), width = "100%", height = "750px")
+                                    )
+                                )
+                      ),
+                      
+                      nav_panel("Heatmap", value = "heatmap", 
+                                div(class = "card shadow-sm mt-3 border-0", 
+                                    div(class = "card-body", style = "min-height: 750px; overflow: hidden;", 
+                                        plotlyOutput(ns("heatmap_plot"), height = "700px", width = "100%")
+                                    )
+                                )
+                      )
+                    )
                 )
       )
     )
@@ -302,6 +236,7 @@ dashboard_ui <- function(id) {
 
 dashboard_server <- function(id, db, db_sync_trigger) {
   moduleServer(id, function(input, output, session) {
+    ns <- session$ns
     
     # SHARED DROPDOWNS / TAB 1 & 2 LOGIC
     observe({
@@ -325,6 +260,19 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       res <- dbGetQuery(db, query, params = list(input$dash_major_hab))
       updateSelectizeInput(session, "dash_habitat", choices = c("Choose subtype..." = "", setNames(res$habitatsubtypeid, res$habitatsubtypename)))
     })
+    
+    # HELPER: Area Formatting
+    format_acres <- function(acres) {
+      if(is.na(acres) || is.null(acres)) return("N/A")
+      paste0(prettyNum(round(acres, 1), big.mark = ","), " Acres")
+    }
+    
+    # HELPER: Draw Statewide Polygon
+    draw_statewide_map <- function(m) {
+      co_geom <- sf::st_polygon(list(matrix(c(-109.05, 37.0, -102.04, 37.0, -102.04, 41.0, -109.05, 41.0, -109.05, 37.0), ncol=2, byrow=TRUE)))
+      co_sf <- sf::st_sfc(co_geom, crs = 4326) %>% sf::st_sf()
+      m %>% addPolygons(data = co_sf, color = "#EAB11E", fillColor = "#EAB11E", fillOpacity = 0.2, weight = 2)
+    }
     
     # -----------------------------------------------------
     # TAB 1: EXPLORE BY SPECIES/HABITAT
@@ -354,193 +302,115 @@ dashboard_server <- function(id, db, db_sync_trigger) {
     output$target_actions_table <- renderDT({
       df <- targ_actions_data(); 
       if(nrow(df) == 0) return(datatable(data.frame(Message = "No species/habitats selected."), rownames = F, options = list(dom = 't')))
-      
-      datatable(df, selection = "single", rownames = F, 
-                options = list(dom = 't',
-                               paging= FALSE,
-                               scrollY="250px",
-                               scrollCollapse=TRUE,
-                               # HIDE: ID(0), sha_id(1), Action Detail(3), actiondesc(6)
-                               columnDefs = list(list(visible = F, targets = c(0, 1, 3, 6)))))
+      datatable(df, selection = "single", rownames = F, options = list(dom = 't', paging= FALSE, scrollY="250px", scrollCollapse=TRUE, columnDefs = list(list(visible = F, targets = c(0, 1, 3, 6)))))
     })
     
-    # UI: Description Card for Tab 1
     output$targ_desc_ui <- renderUI({
       req(input$target_actions_table_rows_selected)
       row <- targ_actions_data()[input$target_actions_table_rows_selected, ]
-      
       desc <- if(is.na(row$actiondesc) || trimws(row$actiondesc) == "") "No description provided." else row$actiondesc
       detail <- if(is.na(row$`Action Detail`) || trimws(row$`Action Detail`) == "") "None" else row$`Action Detail`
-      
-      tagList(
-        p(class = "mb-2", strong("Impl. Progress: "), row$`Impl. Progress`, span(style="margin: 0 10px;", "|"), strong("Timeframe: "), row$Timeframe),
-        p(class = "mb-2", strong("Description: "), br(), em(desc)),
-        p(class = "mb-0", strong("Detail: "), br(), em(detail))
-      )
+      tagList(p(class = "mb-2", strong("Impl. Progress: "), row$`Impl. Progress`, span(style="margin: 0 10px;", "|"), strong("Timeframe: "), row$Timeframe), p(class = "mb-2", strong("Description: "), br(), em(desc)), p(class = "mb-0", strong("Detail: "), br(), em(detail)))
     })
     
     output$targ_threats_ui <- renderUI({
       req(input$target_actions_table_rows_selected); sha_id <- targ_actions_data()[input$target_actions_table_rows_selected, "specieshabitatactionsid"]
-      q <- "SELECT l2.threatl2id, l2.threatl2code || '. ' || l2.threatl2name AS t_name, ta.justification, ta.alternative_category, ta.justification_text
-            FROM track.threatsaddressed ta 
-            JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid 
-            JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id 
-            WHERE sha.specieshabitatactionsid = $1"
+      q <- "SELECT l2.threatl2id, l2.threatl2code || '. ' || l2.threatl2name AS t_name, ta.justification, ta.alternative_category, ta.justification_text FROM track.threatsaddressed ta JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id WHERE sha.specieshabitatactionsid = $1"
       threats <- dbGetQuery(db, q, params = list(as.integer(sha_id)))
       if(nrow(threats) == 0) return(p("No threats recorded."))
-      
       tags$ul(class = "ps-3 mb-0", lapply(1:nrow(threats), function(i) {
-        if (threats$threatl2id[i] == 59) {
-          tags$li(
-            strong("Broader Conservation Goal:", style = "color: #0D67B8;"), # Primary Blue
-            span(style = "font-weight: bold; margin-left: 5px;", threats$alternative_category[i]),
-            br(), 
-            em(ifelse(is.na(threats$justification_text[i]) | trimws(threats$justification_text[i])=="", "No details provided.", threats$justification_text[i])), 
-            class="mb-3"
-          )
-        } else {
-          tags$li(strong(threats$t_name[i]), br(), em(ifelse(is.na(threats$justification[i]) | trimws(threats$justification[i])=="", "No justification provided.", threats$justification[i])), class="mb-3")
-        }
+        if (threats$threatl2id[i] == 59) { tags$li(strong("Broader Conservation Goal:", style = "color: #0D67B8;"), span(style = "font-weight: bold; margin-left: 5px;", threats$alternative_category[i]), br(), em(ifelse(is.na(threats$justification_text[i]) | trimws(threats$justification_text[i])=="", "No details provided.", threats$justification_text[i])), class="mb-3")
+        } else { tags$li(strong(threats$t_name[i]), br(), em(ifelse(is.na(threats$justification[i]) | trimws(threats$justification[i])=="", "No justification provided.", threats$justification[i])), class="mb-3") }
       }))
     })
     
     output$targ_other_targets_ui <- renderUI({
-      req(input$target_actions_table_rows_selected)
-      impl_id <- targ_actions_data()[input$target_actions_table_rows_selected, "implementedactionid"]
-      sha_id <- targ_actions_data()[input$target_actions_table_rows_selected, "specieshabitatactionsid"]
-      
-      q <- "SELECT 
-              CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_name, 
-              CASE WHEN sha.specieshabitat = TRUE THEN 'Species' ELSE 'Habitat' END AS target_type,
-              COALESCE(sadd.\"Meaningful.Details\", hadd.\"Meaningful.Details\", 'None') AS detail_text
-            FROM track.specieshabitatactions sha 
-            LEFT JOIN proj.species s ON sha.speciesid = s.speciesid 
-            LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid 
-            LEFT JOIN proj.speciesactionsdetailsdistinct sadd ON sha.speciesactiondetailid = sadd.speciesactionsdetailsdistinctid 
-            LEFT JOIN proj.habitatactionsdetailsdistinct hadd ON sha.habitatactiondetailid = hadd.habitatactionsdetailsdistinctid
-            WHERE sha.implementedactionid = $1 AND sha.specieshabitatactionsid != $2
-            ORDER BY target_type DESC, target_name ASC"
-      
+      req(input$target_actions_table_rows_selected); impl_id <- targ_actions_data()[input$target_actions_table_rows_selected, "implementedactionid"]; sha_id <- targ_actions_data()[input$target_actions_table_rows_selected, "specieshabitatactionsid"]
+      q <- "SELECT CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_name, CASE WHEN sha.specieshabitat = TRUE THEN 'Species' ELSE 'Habitat' END AS target_type, COALESCE(sadd.\"Meaningful.Details\", hadd.\"Meaningful.Details\", 'None') AS detail_text FROM track.specieshabitatactions sha LEFT JOIN proj.species s ON sha.speciesid = s.speciesid LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid LEFT JOIN proj.speciesactionsdetailsdistinct sadd ON sha.speciesactiondetailid = sadd.speciesactionsdetailsdistinctid LEFT JOIN proj.habitatactionsdetailsdistinct hadd ON sha.habitatactiondetailid = hadd.habitatactionsdetailsdistinctid WHERE sha.implementedactionid = $1 AND sha.specieshabitatactionsid != $2 ORDER BY target_type DESC, target_name ASC"
       others <- dbGetQuery(db, q, params = list(as.integer(impl_id), as.integer(sha_id)))
       if(nrow(others) == 0) return(p("No other targets for this action."))
-      
-      tags$ul(class = "ps-3 mb-0", lapply(1:nrow(others), function(i) {
-        tags$li(strong(others$target_name[i]), " (", others$target_type[i], ")", br(), em("Detail: ", others$detail_text[i]), class="mb-2")
-      }))
+      tags$ul(class = "ps-3 mb-0", lapply(1:nrow(others), function(i) { tags$li(strong(others$target_name[i]), " (", others$target_type[i], ")", br(), em("Detail: ", others$detail_text[i]), class="mb-2") }))
     })
     
-    # --- NEW NARRATIVE HISTORY LIST (TAB 1) ---
     targ_updates_raw <- reactive({
       req(input$target_actions_table_rows_selected); impl_id <- targ_actions_data()[input$target_actions_table_rows_selected, "implementedactionid"]
-      # THE FIX: Updated actiondate to use TO_CHAR for MM/DD/YYYY formatting
-      q <- "SELECT TO_CHAR(a.actiondate, 'MM/DD/YYYY') AS \"Date\", 
-                   a.implementation_progress AS \"Impl. Progress\", 
-                   a.result_progress AS \"Effectiveness\", 
-                   COALESCE(ip.color_hex, '#FFFFFF') AS ip_color,
-                   COALESCE(rp.color_hex, '#FFFFFF') AS rp_color,
-                   a.what_done AS \"What was done?\", 
-                   a.what_learned AS \"What was learned?\", 
-                   a.what_needed AS \"What is needed?\" 
-            FROM track.actiontracking a
-            LEFT JOIN lkup.implementation_progress ip ON a.implementation_progress = ip.progress_name
-            LEFT JOIN lkup.result_progress rp ON a.result_progress = rp.result_name
-            WHERE a.implementedactionid = $1 ORDER BY a.actiondate DESC"
+      q <- "SELECT TO_CHAR(a.actiondate, 'MM/DD/YYYY') AS \"Date\", a.implementation_progress AS \"Impl. Progress\", a.result_progress AS \"Effectiveness\", COALESCE(ip.color_hex, '#FFFFFF') AS ip_color, COALESCE(rp.color_hex, '#FFFFFF') AS rp_color, a.what_done AS \"What was done?\", a.what_learned AS \"What was learned?\", a.what_needed AS \"What is needed?\" FROM track.actiontracking a LEFT JOIN lkup.implementation_progress ip ON a.implementation_progress = ip.progress_name LEFT JOIN lkup.result_progress rp ON a.result_progress = rp.result_name WHERE a.implementedactionid = $1 ORDER BY a.actiondate DESC"
       dbGetQuery(db, q, params = list(as.integer(impl_id)))
     })
     
     output$targ_updates_list <- renderUI({
       df <- targ_updates_raw()
       if(nrow(df) == 0) return(p(class="text-muted text-center mt-3", em("No progress logs recorded yet.")))
-      
-      div(style = "max-height: 400px; overflow-y: auto; padding-right: 10px;",
-          lapply(1:nrow(df), function(i) {
-            ip_text_col <- if(df$ip_color[i] %in% c("#FF4040", "#228B22")) "white" else "black"
-            rp_text_col <- if(df$rp_color[i] %in% c("#FF4040", "#228B22")) "white" else "black"
-            
-            ip_badge <- span(class = "badge", style = paste0("background-color: ", df$ip_color[i], "; color: ", ip_text_col, "; font-size: 0.85em; border: 1px solid #ccc;"), df$`Impl. Progress`[i])
-            rp_badge <- span(class = "badge", style = paste0("background-color: ", df$rp_color[i], "; color: ", rp_text_col, "; font-size: 0.85em; border: 1px solid #ccc;"), df$Effectiveness[i])
-            
-            div(class = "mb-3 p-3 rounded shadow-sm", style = "background-color: #F8F9FA; border: 1px solid #DEE2E6;",
-                div(class = "d-flex justify-content-between align-items-center mb-3", style="border-bottom: 2px solid #e9ecef; padding-bottom: 8px;",
-                    strong(df$Date[i], style="font-size: 1.1em; color: #07234C;"),
-                    # THE FIX: Added labels next to the badges
-                    div(style = "display: flex; align-items: center; gap: 5px;",
-                        span(style="font-size: 0.85em; font-weight: bold; color: #6c757d;", "Implementation:"), ip_badge,
-                        span(style="margin-left: 10px; font-size: 0.85em; font-weight: bold; color: #6c757d;", "Effectiveness:"), rp_badge)
-                ),
-                # THE FIX: Stacked the text below the full question
-                if(!is.na(df$`What was done?`[i]) && df$`What was done?`[i] != "") div(class="mb-3", strong("What was done?", style="color: #055A53;"), p(df$`What was done?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL,
-                if(!is.na(df$`What was learned?`[i]) && df$`What was learned?`[i] != "") div(class="mb-3", strong("What was learned?", style="color: #055A53;"), p(df$`What was learned?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL,
-                if(!is.na(df$`What is needed?`[i]) && df$`What is needed?`[i] != "") div(class="mb-1", strong("What is needed?", style="color: #055A53;"), p(df$`What is needed?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL
-            )
-          })
+      div(style = "max-height: 400px; overflow-y: auto; padding-right: 10px;", lapply(1:nrow(df), function(i) {
+        ip_text_col <- if(df$ip_color[i] %in% c("#FF4040", "#228B22")) "white" else "black"; rp_text_col <- if(df$rp_color[i] %in% c("#FF4040", "#228B22")) "white" else "black"
+        ip_badge <- span(class = "badge", style = paste0("background-color: ", df$ip_color[i], "; color: ", ip_text_col, "; font-size: 0.85em; border: 1px solid #ccc;"), df$`Impl. Progress`[i])
+        rp_badge <- span(class = "badge", style = paste0("background-color: ", df$rp_color[i], "; color: ", rp_text_col, "; font-size: 0.85em; border: 1px solid #ccc;"), df$Effectiveness[i])
+        div(class = "mb-3 p-3 rounded shadow-sm", style = "background-color: #F8F9FA; border: 1px solid #DEE2E6;",
+            div(class = "d-flex justify-content-between align-items-center mb-3", style="border-bottom: 2px solid #e9ecef; padding-bottom: 8px;", strong(df$Date[i], style="font-size: 1.1em; color: #07234C;"), div(style = "display: flex; align-items: center; gap: 5px;", span(style="font-size: 0.85em; font-weight: bold; color: #6c757d;", "Implementation:"), ip_badge, span(style="margin-left: 10px; font-size: 0.85em; font-weight: bold; color: #6c757d;", "Effectiveness:"), rp_badge)),
+            if(!is.na(df$`What was done?`[i]) && df$`What was done?`[i] != "") div(class="mb-3", strong("What was done?", style="color: #055A53;"), p(df$`What was done?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL,
+            if(!is.na(df$`What was learned?`[i]) && df$`What was learned?`[i] != "") div(class="mb-3", strong("What was learned?", style="color: #055A53;"), p(df$`What was learned?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL,
+            if(!is.na(df$`What is needed?`[i]) && df$`What is needed?`[i] != "") div(class="mb-1", strong("What is needed?", style="color: #055A53;"), p(df$`What is needed?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL)
+      }))
+    })
+    
+    output$targ_results_chain_ui <- renderUI({
+      req(input$target_actions_table_rows_selected); row <- targ_actions_data()[input$target_actions_table_rows_selected, ]; impl_id <- row$implementedactionid; sha_id <- row$specieshabitatactionsid
+      q_colors <- "SELECT ia.implementation_progress, ia.result_progress, ip.color_hex AS impl_color, rp.color_hex AS res_color FROM track.implementedactions ia LEFT JOIN lkup.implementation_progress ip ON ia.implementation_progress = ip.progress_name LEFT JOIN lkup.result_progress rp ON ia.result_progress = rp.result_name WHERE ia.implementedactionid = $1"
+      colors_df <- dbGetQuery(db, q_colors, params = list(as.integer(impl_id)))
+      impl_col <- if(nrow(colors_df) > 0 && !is.na(colors_df$impl_color)) colors_df$impl_color else "#FFFFFF"; res_col <- if(nrow(colors_df) > 0 && !is.na(colors_df$res_color)) colors_df$res_color else "#FFFFFF"
+      impl_text <- if(nrow(colors_df) > 0) colors_df$implementation_progress else "Unknown"; res_text <- if(nrow(colors_df) > 0) colors_df$result_progress else "Unknown"
+      is_sp <- input$targ_type == "Species"; target_label <- if(is_sp) input$dash_species else input$dash_habitat
+      q_targ_name <- if(is_sp) "SELECT commonname AS name FROM proj.species WHERE speciesid = $1" else "SELECT habitatsubtypename AS name FROM proj.habitatsubtypes WHERE habitatsubtypeid = $1"
+      t_name_df <- dbGetQuery(db, q_targ_name, params = list(as.integer(target_label))); target_name <- if(nrow(t_name_df) > 0) t_name_df$name[1] else "Selected Target"
+      q_threat_names <- "SELECT l2.threatl2code || '. ' || l2.threatl2name AS t_name FROM track.threatsaddressed ta JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id WHERE ta.specieshabitatactionsid = $1 AND ta.threatl2id != 59 UNION SELECT alternative_category AS t_name FROM track.threatsaddressed WHERE specieshabitatactionsid = $1 AND threatl2id = 59"
+      t_names <- dbGetQuery(db, q_threat_names, params = list(as.integer(sha_id)))
+      threat_label <- if(nrow(t_names) == 1) t_names$t_name[1] else if(nrow(t_names) > 1) paste0(nrow(t_names), " Threats/Goals") else "No Threats Mapped"
+      div(style = "display: flex; align-items: stretch; justify-content: space-between; gap: 10px; text-align: center; margin-top: 10px; margin-bottom: 10px;",
+          div(style = paste0("flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color:", impl_col, ";"), h6("Action / Strategy", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"), strong(row$Action, style = "display: block; font-size: 1.0em; color: #000;"), hr(style = "margin: 8px 0; border-top: 1px solid #666;"), span(style = "font-size: 0.9em; font-weight: bold; color: #333;", paste("Impl:", impl_text))),
+          div(style = "display: flex; align-items: center; color: #999; font-size: 1.5em;", icon("arrow-right")),
+          div(style = paste0("flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color:", res_col, ";"), h6("Mitigated Threat / Goal", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"), strong(threat_label, style = "display: block; font-size: 1.0em; color: #000; word-wrap: break-word;"), hr(style = "margin: 8px 0; border-top: 1px solid #666;"), span(style = "font-size: 0.9em; font-weight: bold; color: #333;", paste("Result:", res_text))),
+          div(style = "display: flex; align-items: center; color: #999; font-size: 1.5em;", icon("arrow-right")),
+          div(style = "flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color: #E2E8F0;", h6("Conservation Target", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"), strong(target_name, style = "display: block; font-size: 1.0em; color: #000; word-wrap: break-word;"))
       )
     })
     
-    # --- NEW VISUAL RESULTS CHAIN (TAB 1) ---
-    output$targ_results_chain_ui <- renderUI({
+    targ_spatial_data <- reactive({
       req(input$target_actions_table_rows_selected)
-      row <- targ_actions_data()[input$target_actions_table_rows_selected, ]
-      impl_id <- row$implementedactionid
-      sha_id <- row$specieshabitatactionsid
+      impl_id <- targ_actions_data()[input$target_actions_table_rows_selected, "implementedactionid"]
+      q <- "SELECT scale_category, ST_AsGeoJSON(geom) as geojson, ST_Area(geom::geography) * 0.000247105 AS acres FROM track.action_spatial WHERE implementedactionid = $1"
+      dbGetQuery(db, q, params = list(as.integer(impl_id)))
+    })
+    
+    output$targ_map_scale <- renderText({
+      df <- targ_spatial_data()
+      if(nrow(df) > 0 && !is.na(df$scale_category)) df$scale_category else "Statewide"
+    })
+    
+    output$targ_map_area <- renderText({
+      df <- targ_spatial_data()
+      scale <- if(nrow(df) > 0 && !is.na(df$scale_category)) df$scale_category else "Statewide"
+      if (scale == "Statewide") return("~66,600,000 Acres (Statewide)")
+      if(nrow(df) > 0 && !is.na(df$acres)) format_acres(df$acres) else "N/A"
+    })
+    
+    output$targ_map <- renderLeaflet({
+      req(input$targ_nav_tabs == "spatial")
+      df <- targ_spatial_data()
+      scale <- if(nrow(df) > 0 && !is.na(df$scale_category)) df$scale_category else "Statewide"
       
-      # Fetch the exact live colors for this action
-      q_colors <- "
-        SELECT ia.implementation_progress, ia.result_progress, ip.color_hex AS impl_color, rp.color_hex AS res_color
-        FROM track.implementedactions ia
-        LEFT JOIN lkup.implementation_progress ip ON ia.implementation_progress = ip.progress_name
-        LEFT JOIN lkup.result_progress rp ON ia.result_progress = rp.result_name
-        WHERE ia.implementedactionid = $1
-      "
-      colors_df <- dbGetQuery(db, q_colors, params = list(as.integer(impl_id)))
+      m <- leaflet() %>% setView(lng = -105.5, lat = 39.0, zoom = 6) %>%
+        addProviderTiles(providers$Esri.WorldTopoMap, group = "Terrain") %>% addProviderTiles(providers$Esri.WorldImagery, group = "Satellite") %>%
+        addLayersControl(baseGroups = c("Terrain", "Satellite"), options = layersControlOptions(collapsed = FALSE))
       
-      impl_col <- if(nrow(colors_df) > 0 && !is.na(colors_df$impl_color)) colors_df$impl_color else "#FFFFFF"
-      res_col <- if(nrow(colors_df) > 0 && !is.na(colors_df$res_color)) colors_df$res_color else "#FFFFFF"
-      impl_text <- if(nrow(colors_df) > 0) colors_df$implementation_progress else "Unknown"
-      res_text <- if(nrow(colors_df) > 0) colors_df$result_progress else "Unknown"
-      
-      # THE FIX: Dynamically fetch the Target Name
-      is_sp <- input$targ_type == "Species"
-      target_label <- if(is_sp) input$dash_species else input$dash_habitat
-      q_targ_name <- if(is_sp) "SELECT commonname AS name FROM proj.species WHERE speciesid = $1" else "SELECT habitatsubtypename AS name FROM proj.habitatsubtypes WHERE habitatsubtypeid = $1"
-      t_name_df <- dbGetQuery(db, q_targ_name, params = list(as.integer(target_label)))
-      target_name <- if(nrow(t_name_df) > 0) t_name_df$name[1] else "Selected Target"
-      
-      # THE FIX: Dynamically fetch the Threat Name(s) for this specific target
-      q_threat_names <- "
-        SELECT l2.threatl2code || '. ' || l2.threatl2name AS t_name FROM track.threatsaddressed ta JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id WHERE ta.specieshabitatactionsid = $1 AND ta.threatl2id != 59
-        UNION
-        SELECT alternative_category AS t_name FROM track.threatsaddressed WHERE specieshabitatactionsid = $1 AND threatl2id = 59
-      "
-      t_names <- dbGetQuery(db, q_threat_names, params = list(as.integer(sha_id)))
-      threat_label <- if(nrow(t_names) == 1) t_names$t_name[1] else if(nrow(t_names) > 1) paste0(nrow(t_names), " Threats/Goals") else "No Threats Mapped"
-      
-      # Generate the custom HTML Flowchart
-      div(style = "display: flex; align-items: stretch; justify-content: space-between; gap: 10px; text-align: center; margin-top: 10px; margin-bottom: 10px;",
-          
-          div(style = paste0("flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color:", impl_col, ";"),
-              h6("Action / Strategy", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"),
-              strong(row$Action, style = "display: block; font-size: 1.0em; color: #000;"),
-              hr(style = "margin: 8px 0; border-top: 1px solid #666;"),
-              span(style = "font-size: 0.9em; font-weight: bold; color: #333;", paste("Impl:", impl_text))
-          ),
-          
-          div(style = "display: flex; align-items: center; color: #999; font-size: 1.5em;", icon("arrow-right")),
-          
-          div(style = paste0("flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color:", res_col, ";"),
-              h6("Mitigated Threat / Goal", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"),
-              strong(threat_label, style = "display: block; font-size: 1.0em; color: #000; word-wrap: break-word;"),
-              hr(style = "margin: 8px 0; border-top: 1px solid #666;"),
-              span(style = "font-size: 0.9em; font-weight: bold; color: #333;", paste("Result:", res_text))
-          ),
-          
-          div(style = "display: flex; align-items: center; color: #999; font-size: 1.5em;", icon("arrow-right")),
-          
-          div(style = "flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color: #E2E8F0;",
-              h6("Conservation Target", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"),
-              strong(target_name, style = "display: block; font-size: 1.0em; color: #000; word-wrap: break-word;")
-          )
-      )
+      if (scale == "Statewide") {
+        m <- draw_statewide_map(m)
+      } else if(nrow(df) > 0 && !is.na(df$geojson)) {
+        tryCatch({
+          geo_sf <- sf::st_as_sfc(df$geojson, GeoJSON = TRUE) %>% sf::st_sf(crs = 4326) %>% sf::st_make_valid()
+          if(nrow(geo_sf) > 0) m <- m %>% addPolygons(data = geo_sf, color = "#EAB11E", fillColor = "#EAB11E", fillOpacity = 0.5, weight = 2)
+        }, error = function(e) { print(e) })
+      }
+      m
     })
     
     
@@ -560,399 +430,233 @@ dashboard_server <- function(id, db, db_sync_trigger) {
     act_targets_data <- reactive({
       db_sync_trigger()
       if (is.null(input$dash_l2) || input$dash_l2 == "") return(data.frame())
-      
-      q <- "SELECT 
-              ia.implementedactionid, 
-              l2.actionl2code || '. ' || l2.actionl2name AS \"Action\", 
-              ia.implementation_progress AS \"Impl. Progress\", 
-              ia.timeframe AS \"Timeframe\",
-              ia.actiondesc,
-              STRING_AGG(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END, ', ') AS \"Included Targets\"
-            FROM track.implementedactions ia 
-            JOIN track.specieshabitatactions sha ON ia.implementedactionid = sha.implementedactionid 
-            JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id 
-            LEFT JOIN proj.species s ON sha.speciesid = s.speciesid 
-            LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid 
-            WHERE ia.actionl2id = $1
-            GROUP BY ia.implementedactionid, l2.actionl2code, l2.actionl2name, ia.implementation_progress, ia.timeframe, ia.actiondesc
-            ORDER BY ia.implementedactionid DESC"
-      
+      q <- "SELECT ia.implementedactionid, l2.actionl2code || '. ' || l2.actionl2name AS \"Action\", ia.implementation_progress AS \"Impl. Progress\", ia.timeframe AS \"Timeframe\", ia.actiondesc, STRING_AGG(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END, ', ') AS \"Included Targets\" FROM track.implementedactions ia JOIN track.specieshabitatactions sha ON ia.implementedactionid = sha.implementedactionid JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id LEFT JOIN proj.species s ON sha.speciesid = s.speciesid LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid WHERE ia.actionl2id = $1 GROUP BY ia.implementedactionid, l2.actionl2code, l2.actionl2name, ia.implementation_progress, ia.timeframe, ia.actiondesc ORDER BY ia.implementedactionid DESC"
       dbGetQuery(db, q, params = list(as.integer(input$dash_l2)))
     })
     
     output$action_targets_table <- renderDT({
       df <- act_targets_data()
       if(nrow(df) == 0) return(datatable(data.frame(Message = "No action selected."), rownames = F, options = list(dom = 't')))
-      
-      datatable(df, selection = "single", rownames = F, options = list(
-        dom = 'ft', 
-        paging = FALSE,          
-        scrollY = "250px",      
-        scrollCollapse = TRUE,   
-        info = FALSE,
-        # HIDE: ID(0), actiondesc(4)
-        columnDefs = list(list(visible = F, targets = c(0, 4)))))
+      datatable(df, selection = "single", rownames = F, options = list(dom = 'ft', paging = FALSE, scrollY = "250px", scrollCollapse = TRUE, info = FALSE, columnDefs = list(list(visible = F, targets = c(0, 4)))))
     })
     
-    # UI: Description Card for Tab 2
     output$act_desc_ui <- renderUI({
-      req(input$action_targets_table_rows_selected)
-      row <- act_targets_data()[input$action_targets_table_rows_selected, ]
-      
+      req(input$action_targets_table_rows_selected); row <- act_targets_data()[input$action_targets_table_rows_selected, ]
       desc <- if(is.na(row$actiondesc) || trimws(row$actiondesc) == "") "No description provided." else row$actiondesc
-      
-      tagList(
-        p(class = "mb-2", strong("Impl. Progress: "), row$`Impl. Progress`, span(style="margin: 0 10px;", "|"), strong("Timeframe: "), row$Timeframe),
-        p(class = "mb-0", strong("Description: "), br(), em(desc))
-      )
+      tagList(p(class = "mb-2", strong("Impl. Progress: "), row$`Impl. Progress`, span(style="margin: 0 10px;", "|"), strong("Timeframe: "), row$Timeframe), p(class = "mb-0", strong("Description: "), br(), em(desc)))
     })
     
     output$act_threats_ui <- renderUI({
-      req(input$action_targets_table_rows_selected)
-      impl_id <- act_targets_data()[input$action_targets_table_rows_selected, "implementedactionid"]
+      req(input$action_targets_table_rows_selected); impl_id <- act_targets_data()[input$action_targets_table_rows_selected, "implementedactionid"]
+      q <- "SELECT l2.threatl2id, l2.threatl2code || '. ' || l2.threatl2name AS t_name, ta.justification, ta.alternative_category, ta.justification_text, STRING_AGG(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END, ', ') AS target_labels FROM track.threatsaddressed ta JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id LEFT JOIN proj.species s ON sha.speciesid = s.speciesid LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid WHERE sha.implementedactionid = $1 GROUP BY l2.threatl2id, l2.threatl2code, l2.threatl2name, ta.justification, ta.alternative_category, ta.justification_text ORDER BY t_name ASC"
+      threats_df <- dbGetQuery(db, q, params = list(as.integer(impl_id)))
       
-      q <- "SELECT 
-              l2.threatl2id,
-              l2.threatl2code || '. ' || l2.threatl2name AS t_name, 
-              ta.justification,
-              ta.alternative_category,
-              ta.justification_text,
-              STRING_AGG(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END, ', ') AS target_labels
-            FROM track.threatsaddressed ta 
-            JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid 
-            JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id 
-            LEFT JOIN proj.species s ON sha.speciesid = s.speciesid
-            LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid
-            WHERE sha.implementedactionid = $1
-            GROUP BY l2.threatl2id, l2.threatl2code, l2.threatl2name, ta.justification, ta.alternative_category, ta.justification_text
-            ORDER BY t_name ASC"
-      
-      threats <- dbGetQuery(db, q, params = list(as.integer(impl_id)))
-      if(nrow(threats) == 0) return(p("No threats recorded."))
-      
-      tags$ul(class = "ps-3 mb-0", lapply(1:nrow(threats), function(i) {
-        if (threats$threatl2id[i] == 59) {
-          tags$li(
-            strong("Broader Conservation Goal:", style = "color: #0D67B8;"),
-            span(style = "font-weight: bold; margin-left: 5px;", threats$alternative_category[i]),
-            br(),
-            span(style="color: #055A53; font-size: 0.9em; font-weight: bold;", paste0("[", threats$target_labels[i], "]")),
-            br(), 
-            em(ifelse(is.na(threats$justification_text[i]) | trimws(threats$justification_text[i])=="", "No details provided.", threats$justification_text[i])), 
-            class="mb-3"
-          )
-        } else {
-          tags$li(
-            strong(threats$t_name[i]), 
-            br(),
-            span(style="color: #055A53; font-size: 0.9em; font-weight: bold;", paste0("[", threats$target_labels[i], "]")),
-            br(), 
-            em(ifelse(is.na(threats$justification[i]) | trimws(threats$justification[i])=="", "No justification provided.", threats$justification[i])), 
-            class="mb-3"
-          )
-        }
-      }))
+      if(nrow(threats_df) > 0) {
+        threats_df$group_name <- ifelse(threats_df$threatl2id == 59, paste0("Broader Goal: ", threats_df$alternative_category), threats_df$threat_name)
+        tags$ul(class = "mt-2 mb-0", lapply(unique(threats_df$group_name), function(g) {
+          sub_df <- threats_df[threats_df$group_name == g, ]; is_broader <- sub_df$threatl2id[1] == 59
+          title <- if(is_broader) strong("Broader Goal: ", style="color: #0D67B8;", sub_df$alternative_category[1]) else strong(sub_df$threat_name[1])
+          t_list <- tags$ul(class="mt-1 mb-3", style="list-style-type:circle;", lapply(1:nrow(sub_df), function(i) tags$li(span(class="text-primary fw-bold", sub_df$target_labels[i]), " - ", em(if(is_broader) sub_df$justification_text[i] else sub_df$justification[i]))))
+          tags$li(class="mb-2", title, t_list)
+        }))
+      } else { p(em("No threats recorded.")) }
     })
     
     output$act_other_targets_ui <- renderUI({
-      req(input$action_targets_table_rows_selected)
-      impl_id <- act_targets_data()[input$action_targets_table_rows_selected, "implementedactionid"]
-      
-      q <- "SELECT 
-              CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_name, 
-              CASE WHEN sha.specieshabitat = TRUE THEN 'Species' ELSE 'Habitat' END AS target_type,
-              COALESCE(sadd.\"Meaningful.Details\", hadd.\"Meaningful.Details\", 'None') AS detail_text
-            FROM track.specieshabitatactions sha 
-            LEFT JOIN proj.species s ON sha.speciesid = s.speciesid 
-            LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid 
-            LEFT JOIN proj.speciesactionsdetailsdistinct sadd ON sha.speciesactiondetailid = sadd.speciesactionsdetailsdistinctid 
-            LEFT JOIN proj.habitatactionsdetailsdistinct hadd ON sha.habitatactiondetailid = hadd.habitatactionsdetailsdistinctid
-            WHERE sha.implementedactionid = $1
-            ORDER BY target_type DESC, target_name ASC"
-      
+      req(input$action_targets_table_rows_selected); impl_id <- act_targets_data()[input$action_targets_table_rows_selected, "implementedactionid"]
+      q <- "SELECT CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_name, CASE WHEN sha.specieshabitat = TRUE THEN 'Species' ELSE 'Habitat' END AS target_type, COALESCE(sadd.\"Meaningful.Details\", hadd.\"Meaningful.Details\", 'None') AS detail_text FROM track.specieshabitatactions sha LEFT JOIN proj.species s ON sha.speciesid = s.speciesid LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid LEFT JOIN proj.speciesactionsdetailsdistinct sadd ON sha.speciesactiondetailid = sadd.speciesactionsdetailsdistinctid LEFT JOIN proj.habitatactionsdetailsdistinct hadd ON sha.habitatactiondetailid = hadd.habitatactionsdetailsdistinctid WHERE sha.implementedactionid = $1 ORDER BY target_type DESC, target_name ASC"
       others <- dbGetQuery(db, q, params = list(as.integer(impl_id)))
       if(nrow(others) == 0) return(p("No species/habitats assigned."))
-      
-      tags$ul(class = "ps-3 mb-0", lapply(1:nrow(others), function(i) {
-        tags$li(strong(others$target_name[i]), " (", others$target_type[i], ")", br(), em("Detail: ", others$detail_text[i]), class="mb-2")
-      }))
+      tags$ul(class = "ps-3 mb-0", lapply(1:nrow(others), function(i) { tags$li(strong(others$target_name[i]), " (", others$target_type[i], ")", br(), em("Detail: ", others$detail_text[i]), class="mb-2") }))
     })
     
-    # --- NEW NARRATIVE HISTORY LIST (TAB 2) ---
     act_updates_raw <- reactive({
       req(input$action_targets_table_rows_selected); impl_id <- act_targets_data()[input$action_targets_table_rows_selected, "implementedactionid"]
-      # THE FIX: Updated actiondate to use TO_CHAR for MM/DD/YYYY formatting
-      q <- "SELECT TO_CHAR(a.actiondate, 'MM/DD/YYYY') AS \"Date\", 
-                   a.implementation_progress AS \"Impl. Progress\", 
-                   a.result_progress AS \"Effectiveness\", 
-                   COALESCE(ip.color_hex, '#FFFFFF') AS ip_color,
-                   COALESCE(rp.color_hex, '#FFFFFF') AS rp_color,
-                   a.what_done AS \"What was done?\", 
-                   a.what_learned AS \"What was learned?\", 
-                   a.what_needed AS \"What is needed?\" 
-            FROM track.actiontracking a
-            LEFT JOIN lkup.implementation_progress ip ON a.implementation_progress = ip.progress_name
-            LEFT JOIN lkup.result_progress rp ON a.result_progress = rp.result_name
-            WHERE a.implementedactionid = $1 ORDER BY a.actiondate DESC"
+      q <- "SELECT TO_CHAR(a.actiondate, 'MM/DD/YYYY') AS \"Date\", a.implementation_progress AS \"Impl. Progress\", a.result_progress AS \"Effectiveness\", COALESCE(ip.color_hex, '#FFFFFF') AS ip_color, COALESCE(rp.color_hex, '#FFFFFF') AS rp_color, a.what_done AS \"What was done?\", a.what_learned AS \"What was learned?\", a.what_needed AS \"What is needed?\" FROM track.actiontracking a LEFT JOIN lkup.implementation_progress ip ON a.implementation_progress = ip.progress_name LEFT JOIN lkup.result_progress rp ON a.result_progress = rp.result_name WHERE a.implementedactionid = $1 ORDER BY a.actiondate DESC"
       dbGetQuery(db, q, params = list(as.integer(impl_id)))
     })
     
     output$act_updates_list <- renderUI({
       df <- act_updates_raw()
       if(nrow(df) == 0) return(p(class="text-muted text-center mt-3", em("No progress logs recorded yet.")))
-      
-      div(style = "max-height: 400px; overflow-y: auto; padding-right: 10px;",
-          lapply(1:nrow(df), function(i) {
-            ip_text_col <- if(df$ip_color[i] %in% c("#FF4040", "#228B22")) "white" else "black"
-            rp_text_col <- if(df$rp_color[i] %in% c("#FF4040", "#228B22")) "white" else "black"
-            
-            ip_badge <- span(class = "badge", style = paste0("background-color: ", df$ip_color[i], "; color: ", ip_text_col, "; font-size: 0.85em; border: 1px solid #ccc;"), df$`Impl. Progress`[i])
-            rp_badge <- span(class = "badge", style = paste0("background-color: ", df$rp_color[i], "; color: ", rp_text_col, "; font-size: 0.85em; border: 1px solid #ccc;"), df$Effectiveness[i])
-            
-            div(class = "mb-3 p-3 rounded shadow-sm", style = "background-color: #F8F9FA; border: 1px solid #DEE2E6;",
-                div(class = "d-flex justify-content-between align-items-center mb-3", style="border-bottom: 2px solid #e9ecef; padding-bottom: 8px;",
-                    strong(df$Date[i], style="font-size: 1.1em; color: #07234C;"),
-                    # THE FIX: Added labels next to the badges
-                    div(style = "display: flex; align-items: center; gap: 5px;",
-                        span(style="font-size: 0.85em; font-weight: bold; color: #6c757d;", "Implementation:"), ip_badge,
-                        span(style="margin-left: 10px; font-size: 0.85em; font-weight: bold; color: #6c757d;", "Effectiveness:"), rp_badge)
-                ),
-                # THE FIX: Stacked the text below the full question
-                if(!is.na(df$`What was done?`[i]) && df$`What was done?`[i] != "") div(class="mb-3", strong("What was done?", style="color: #055A53;"), p(df$`What was done?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL,
-                if(!is.na(df$`What was learned?`[i]) && df$`What was learned?`[i] != "") div(class="mb-3", strong("What was learned?", style="color: #055A53;"), p(df$`What was learned?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL,
-                if(!is.na(df$`What is needed?`[i]) && df$`What is needed?`[i] != "") div(class="mb-1", strong("What is needed?", style="color: #055A53;"), p(df$`What is needed?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL
-            )
-          })
-      )
-    })
-    
-    # --- NEW VISUAL RESULTS CHAIN (TAB 2) ---
-    output$act_results_chain_ui <- renderUI({
-      req(input$action_targets_table_rows_selected)
-      row <- act_targets_data()[input$action_targets_table_rows_selected, ]
-      impl_id <- row$implementedactionid
-      
-      # Fetch the exact live colors for this action
-      q_colors <- "
-        SELECT ia.implementation_progress, ia.result_progress, ip.color_hex AS impl_color, rp.color_hex AS res_color
-        FROM track.implementedactions ia
-        LEFT JOIN lkup.implementation_progress ip ON ia.implementation_progress = ip.progress_name
-        LEFT JOIN lkup.result_progress rp ON ia.result_progress = rp.result_name
-        WHERE ia.implementedactionid = $1
-      "
-      colors_df <- dbGetQuery(db, q_colors, params = list(as.integer(impl_id)))
-      
-      impl_col <- if(nrow(colors_df) > 0 && !is.na(colors_df$impl_color)) colors_df$impl_color else "#FFFFFF"
-      res_col <- if(nrow(colors_df) > 0 && !is.na(colors_df$res_color)) colors_df$res_color else "#FFFFFF"
-      impl_text <- if(nrow(colors_df) > 0) colors_df$implementation_progress else "Unknown"
-      res_text <- if(nrow(colors_df) > 0) colors_df$result_progress else "Unknown"
-      
-      # THE FIX: Dynamically fetch ALL Threat Name(s) mapped to this action
-      q_threat_names <- "
-        SELECT DISTINCT l2.threatl2code || '. ' || l2.threatl2name AS t_name
-        FROM track.threatsaddressed ta
-        JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid
-        JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id
-        WHERE sha.implementedactionid = $1 AND ta.threatl2id != 59
-        UNION
-        SELECT DISTINCT alternative_category AS t_name
-        FROM track.threatsaddressed ta
-        JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid
-        WHERE sha.implementedactionid = $1 AND ta.threatl2id = 59
-      "
-      t_names <- dbGetQuery(db, q_threat_names, params = list(as.integer(impl_id)))
-      threat_label <- if(nrow(t_names) == 1) t_names$t_name[1] else if(nrow(t_names) > 1) paste0(nrow(t_names), " Threats/Goals") else "No Threats Mapped"
-      
-      div(style = "display: flex; align-items: stretch; justify-content: space-between; gap: 10px; text-align: center; margin-top: 10px; margin-bottom: 10px;",
-          
-          div(style = paste0("flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color:", impl_col, ";"),
-              h6("Action / Strategy", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"),
-              strong(row$Action, style = "display: block; font-size: 1.0em; color: #000;"),
-              hr(style = "margin: 8px 0; border-top: 1px solid #666;"),
-              span(style = "font-size: 0.9em; font-weight: bold; color: #333;", paste("Impl:", impl_text))
-          ),
-          
-          div(style = "display: flex; align-items: center; color: #999; font-size: 1.5em;", icon("arrow-right")),
-          
-          div(style = paste0("flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color:", res_col, ";"),
-              h6("Mitigated Threat / Goal", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"),
-              strong(threat_label, style = "display: block; font-size: 1.0em; color: #000; word-wrap: break-word;"),
-              hr(style = "margin: 8px 0; border-top: 1px solid #666;"),
-              span(style = "font-size: 0.9em; font-weight: bold; color: #333;", paste("Result:", res_text))
-          ),
-          
-          div(style = "display: flex; align-items: center; color: #999; font-size: 1.5em;", icon("arrow-right")),
-          
-          div(style = "flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color: #E2E8F0;",
-              h6("Conservation Targets", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"),
-              strong(row$`Included Targets`, style = "display: block; font-size: 1.0em; color: #000; word-wrap: break-word;")
-          )
-      )
-    })
-    
-    
-    # -----------------------------------------------------
-    # TAB 3 LOGIC (ALL ACTIONS Table)
-    # -----------------------------------------------------
-    all_actions_data <- reactive({
-      db_sync_trigger()
-      q <- "SELECT 
-              ia.implementedactionid, 
-              TO_CHAR(ia.createdon, 'MM/DD/YY') AS \"Date Submitted\",
-              l2.actionl2name AS \"Level 2 Action\", 
-              CASE 
-                WHEN tgts.t_count = 1 THEN tgts.first_targ
-                WHEN tgts.t_count > 1 THEN 'Multiple'
-                ELSE 'None'
-              END AS \"Species/Habitat\",
-              ia.implementation_progress AS \"Impl. Progress\",
-              ia.actiondesc
-            FROM track.implementedactions ia 
-            JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id 
-            LEFT JOIN (
-              SELECT 
-                sha.implementedactionid,
-                COUNT(sha.specieshabitatactionsid) AS t_count,
-                MAX(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END) AS first_targ
-              FROM track.specieshabitatactions sha
-              LEFT JOIN proj.species s ON sha.speciesid = s.speciesid
-              LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid
-              GROUP BY sha.implementedactionid
-            ) tgts ON ia.implementedactionid = tgts.implementedactionid
-            ORDER BY 
-              CASE ia.implementation_progress 
-                WHEN 'Completed' THEN 1 
-                WHEN 'On-track' THEN 2 
-                WHEN 'Minor issues' THEN 3 
-                WHEN 'Major issues' THEN 4 
-                WHEN 'Scheduled for future' THEN 5 
-                ELSE 6 
-              END ASC, ia.createdon DESC"
-      dbGetQuery(db, q)
-    })
-    
-    output$all_actions_table <- renderDT({
-      datatable(all_actions_data(), selection = "single", rownames = F, options = list(
-        dom = 'ftip',
-        paging = FALSE,        
-        scrollY = "calc(100vh - 250px)",        
-        scrollCollapse = TRUE,   
-        info = FALSE,
-        # HIDE: ID (index 0) and actiondesc (now index 5 because Timeframe was removed)
-        columnDefs = list(list(visible = F, targets = c(0, 5)))
-      ))
-    })
-    
-    # UI: Description Card for Tab 3
-    output$all_act_desc_ui <- renderUI({
-      req(input$all_actions_table_rows_selected)
-      row <- all_actions_data()[input$all_actions_table_rows_selected, ]
-      
-      desc <- if(is.na(row$actiondesc) || trimws(row$actiondesc) == "") "No description provided." else row$actiondesc
-      
-      tagList(
-        p(class = "mb-2", strong("Impl. Progress: "), row$`Impl. Progress`),
-        p(class = "mb-0", strong("Description: "), br(), em(desc))
-      )
-    })
-    
-    output$all_act_targets_ui <- renderUI({
-      req(input$all_actions_table_rows_selected); impl_id <- all_actions_data()[input$all_actions_table_rows_selected, "implementedactionid"]
-      q <- "SELECT CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_name, CASE WHEN sha.specieshabitat = TRUE THEN 'Species' ELSE 'Habitat' END AS target_type, COALESCE(sadd.\"Meaningful.Details\", hadd.\"Meaningful.Details\", 'None') AS detail_text FROM track.specieshabitatactions sha LEFT JOIN proj.species s ON sha.speciesid = s.speciesid LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid LEFT JOIN proj.speciesactionsdetailsdistinct sadd ON sha.speciesactiondetailid = sadd.speciesactionsdetailsdistinctid LEFT JOIN proj.habitatactionsdetailsdistinct hadd ON sha.habitatactiondetailid = hadd.habitatactionsdetailsdistinctid WHERE sha.implementedactionid = $1"
-      res <- dbGetQuery(db, q, params = list(as.integer(impl_id)))
-      if(nrow(res) == 0) return(p("No species/habitats mapped."))
-      tags$ul(class = "ps-3 mb-0", lapply(1:nrow(res), function(i) tags$li(strong(res$target_name[i]), " (", res$target_type[i], ")", br(), em("Detail: ", res$detail_text[i]), class = "mb-2")))
-    })
-    
-    output$all_act_threats_ui <- renderUI({
-      req(input$all_actions_table_rows_selected)
-      impl_id <- all_actions_data()[input$all_actions_table_rows_selected, "implementedactionid"]
-      
-      q <- "SELECT 
-              l2.threatl2id,
-              l2.threatl2code || '. ' || l2.threatl2name AS t_name, 
-              ta.justification,
-              ta.alternative_category,
-              ta.justification_text,
-              STRING_AGG(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END, ', ') AS target_labels
-            FROM track.threatsaddressed ta 
-            JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid 
-            JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id 
-            LEFT JOIN proj.species s ON sha.speciesid = s.speciesid
-            LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid
-            WHERE sha.implementedactionid = $1
-            GROUP BY l2.threatl2id, l2.threatl2code, l2.threatl2name, ta.justification, ta.alternative_category, ta.justification_text
-            ORDER BY t_name ASC"
-      
-      res <- dbGetQuery(db, q, params = list(as.integer(impl_id)))
-      if(nrow(res) == 0) return(p("No threats recorded."))
-      
-      tags$ul(class = "ps-3 mb-0", lapply(1:nrow(res), function(i) {
-        if (res$threatl2id[i] == 59) {
-          tags$li(
-            strong("Broader Conservation Goal:", style = "color: #0D67B8;"),
-            span(style = "font-weight: bold; margin-left: 5px;", res$alternative_category[i]),
-            br(),
-            span(style="color: #055A53; font-size: 0.9em; font-weight: bold;", paste0("[", res$target_labels[i], "]")),
-            br(), 
-            em(ifelse(is.na(res$justification_text[i]) | trimws(res$justification_text[i])=="", "No details provided.", res$justification_text[i])), 
-            class="mb-3"
-          )
-        } else {
-          tags$li(
-            strong(res$t_name[i]), 
-            br(),
-            span(style="color: #055A53; font-size: 0.9em; font-weight: bold;", paste0("[", res$target_labels[i], "]")),
-            br(), 
-            em(ifelse(is.na(res$justification[i]) | trimws(res$justification[i])=="", "No justification provided.", res$justification[i])), 
-            class="mb-3"
-          )
-        }
+      div(style = "max-height: 400px; overflow-y: auto; padding-right: 10px;", lapply(1:nrow(df), function(i) {
+        ip_text_col <- if(df$ip_color[i] %in% c("#FF4040", "#228B22")) "white" else "black"; rp_text_col <- if(df$rp_color[i] %in% c("#FF4040", "#228B22")) "white" else "black"
+        ip_badge <- span(class = "badge", style = paste0("background-color: ", df$ip_color[i], "; color: ", ip_text_col, "; font-size: 0.85em; border: 1px solid #ccc;"), df$`Impl. Progress`[i])
+        rp_badge <- span(class = "badge", style = paste0("background-color: ", df$rp_color[i], "; color: ", rp_text_col, "; font-size: 0.85em; border: 1px solid #ccc;"), df$Effectiveness[i])
+        div(class = "mb-3 p-3 rounded shadow-sm", style = "background-color: #F8F9FA; border: 1px solid #DEE2E6;",
+            div(class = "d-flex justify-content-between align-items-center mb-3", style="border-bottom: 2px solid #e9ecef; padding-bottom: 8px;", strong(df$Date[i], style="font-size: 1.1em; color: #07234C;"), div(style = "display: flex; align-items: center; gap: 5px;", span(style="font-size: 0.85em; font-weight: bold; color: #6c757d;", "Implementation:"), ip_badge, span(style="margin-left: 10px; font-size: 0.85em; font-weight: bold; color: #6c757d;", "Effectiveness:"), rp_badge)),
+            if(!is.na(df$`What was done?`[i]) && df$`What was done?`[i] != "") div(class="mb-3", strong("What was done?", style="color: #055A53;"), p(df$`What was done?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL,
+            if(!is.na(df$`What was learned?`[i]) && df$`What was learned?`[i] != "") div(class="mb-3", strong("What was learned?", style="color: #055A53;"), p(df$`What was learned?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL,
+            if(!is.na(df$`What is needed?`[i]) && df$`What is needed?`[i] != "") div(class="mb-1", strong("What is needed?", style="color: #055A53;"), p(df$`What is needed?`[i], class="text-dark mt-1 mb-0", style="font-size: 0.95em;")) else NULL)
       }))
     })
     
-    output$all_act_recent_update_ui <- renderUI({
+    output$act_results_chain_ui <- renderUI({
+      req(input$action_targets_table_rows_selected); row <- act_targets_data()[input$action_targets_table_rows_selected, ]; impl_id <- row$implementedactionid
+      q_colors <- "SELECT ia.implementation_progress, ia.result_progress, ip.color_hex AS impl_color, rp.color_hex AS res_color FROM track.implementedactions ia LEFT JOIN lkup.implementation_progress ip ON ia.implementation_progress = ip.progress_name LEFT JOIN lkup.result_progress rp ON ia.result_progress = rp.result_name WHERE ia.implementedactionid = $1"
+      colors_df <- dbGetQuery(db, q_colors, params = list(as.integer(impl_id)))
+      impl_col <- if(nrow(colors_df) > 0 && !is.na(colors_df$impl_color)) colors_df$impl_color else "#FFFFFF"; res_col <- if(nrow(colors_df) > 0 && !is.na(colors_df$res_color)) colors_df$res_color else "#FFFFFF"
+      impl_text <- if(nrow(colors_df) > 0) colors_df$implementation_progress else "Unknown"; res_text <- if(nrow(colors_df) > 0) colors_df$result_progress else "Unknown"
+      q_threat_names <- "SELECT DISTINCT l2.threatl2code || '. ' || l2.threatl2name AS t_name FROM track.threatsaddressed ta JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id WHERE sha.implementedactionid = $1 AND ta.threatl2id != 59 UNION SELECT DISTINCT alternative_category AS t_name FROM track.threatsaddressed ta JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid WHERE sha.implementedactionid = $1 AND ta.threatl2id = 59"
+      t_names <- dbGetQuery(db, q_threat_names, params = list(as.integer(impl_id)))
+      threat_label <- if(nrow(t_names) == 1) t_names$t_name[1] else if(nrow(t_names) > 1) paste0(nrow(t_names), " Threats/Goals") else "No Threats Mapped"
+      div(style = "display: flex; align-items: stretch; justify-content: space-between; gap: 10px; text-align: center; margin-top: 10px; margin-bottom: 10px;",
+          div(style = paste0("flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color:", impl_col, ";"), h6("Action / Strategy", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"), strong(row$Action, style = "display: block; font-size: 1.0em; color: #000;"), hr(style = "margin: 8px 0; border-top: 1px solid #666;"), span(style = "font-size: 0.9em; font-weight: bold; color: #333;", paste("Impl:", impl_text))),
+          div(style = "display: flex; align-items: center; color: #999; font-size: 1.5em;", icon("arrow-right")),
+          div(style = paste0("flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color:", res_col, ";"), h6("Mitigated Threat / Goal", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"), strong(threat_label, style = "display: block; font-size: 1.0em; color: #000; word-wrap: break-word;"), hr(style = "margin: 8px 0; border-top: 1px solid #666;"), span(style = "font-size: 0.9em; font-weight: bold; color: #333;", paste("Result:", res_text))),
+          div(style = "display: flex; align-items: center; color: #999; font-size: 1.5em;", icon("arrow-right")),
+          div(style = "flex: 1; border-radius: 8px; padding: 15px; border: 2px solid #ccc; background-color: #E2E8F0;", h6("Conservation Targets", style = "font-size: 0.85em; text-transform: uppercase; color: #333; margin-bottom: 5px;"), strong(row$`Included Targets`, style = "display: block; font-size: 1.0em; color: #000; word-wrap: break-word;"))
+      )
+    })
+    
+    act_spatial_data <- reactive({
+      req(input$action_targets_table_rows_selected)
+      impl_id <- act_targets_data()[input$action_targets_table_rows_selected, "implementedactionid"]
+      q <- "SELECT scale_category, ST_AsGeoJSON(geom) as geojson, ST_Area(geom::geography) * 0.000247105 AS acres FROM track.action_spatial WHERE implementedactionid = $1"
+      dbGetQuery(db, q, params = list(as.integer(impl_id)))
+    })
+    
+    output$act_map_scale <- renderText({
+      df <- act_spatial_data()
+      if(nrow(df) > 0 && !is.na(df$scale_category)) df$scale_category else "Statewide"
+    })
+    
+    output$act_map_area <- renderText({
+      df <- act_spatial_data()
+      scale <- if(nrow(df) > 0 && !is.na(df$scale_category)) df$scale_category else "Statewide"
+      if (scale == "Statewide") return("~66,600,000 Acres (Statewide)")
+      if(nrow(df) > 0 && !is.na(df$acres)) format_acres(df$acres) else "N/A"
+    })
+    
+    output$act_map <- renderLeaflet({
+      req(input$act_nav_tabs == "spatial")
+      df <- act_spatial_data()
+      scale <- if(nrow(df) > 0 && !is.na(df$scale_category)) df$scale_category else "Statewide"
+      
+      m <- leaflet() %>% setView(lng = -105.5, lat = 39.0, zoom = 6) %>%
+        addProviderTiles(providers$Esri.WorldTopoMap, group = "Terrain") %>% addProviderTiles(providers$Esri.WorldImagery, group = "Satellite") %>%
+        addLayersControl(baseGroups = c("Terrain", "Satellite"), options = layersControlOptions(collapsed = FALSE))
+      
+      if (scale == "Statewide") {
+        m <- draw_statewide_map(m)
+      } else if(nrow(df) > 0 && !is.na(df$geojson)) {
+        tryCatch({
+          geo_sf <- sf::st_as_sfc(df$geojson, GeoJSON = TRUE) %>% sf::st_sf(crs = 4326) %>% sf::st_make_valid()
+          if(nrow(geo_sf) > 0) {
+            m <- m %>% addPolygons(data = geo_sf, color = "#EAB11E", fillColor = "#EAB11E", fillOpacity = 0.5, weight = 2)
+          }
+        }, error = function(e) { print(e) })
+      }
+      m
+    })
+    
+    
+    # -----------------------------------------------------
+    # TAB 3 LOGIC (ALL ACTIONS Table + Megamodal)
+    # -----------------------------------------------------
+    get_status_badge <- function(status) {
+      if (is.null(status) || is.na(status)) return(span(class = "badge bg-secondary", "Unknown"))
+      color <- switch(status,
+                      "Completed" = "bg-success", "Achieved" = "bg-success", "On-track" = "bg-success",
+                      "Minor issues" = "bg-warning text-dark", "Partially achieved" = "bg-warning text-dark",
+                      "Major issues" = "bg-danger", "Not achieved" = "bg-danger", "Abandoned" = "bg-danger",
+                      "bg-secondary")
+      as.character(span(class = paste("badge", color), status))
+    }
+    
+    all_actions_data <- reactive({
+      db_sync_trigger()
+      q <- "SELECT ia.implementedactionid, TO_CHAR(ia.createdon, 'MM/DD/YYYY') AS \"Date Submitted\", l2.actionl2name AS \"Action\", CASE WHEN tgts.t_count = 1 THEN tgts.first_targ WHEN tgts.t_count > 1 THEN 'Multiple' ELSE 'None' END AS \"Targets\", ia.implementation_progress AS \"Impl. Progress\" FROM track.implementedactions ia JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id LEFT JOIN (SELECT sha.implementedactionid, COUNT(sha.specieshabitatactionsid) AS t_count, MAX(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END) AS first_targ FROM track.specieshabitatactions sha LEFT JOIN proj.species s ON sha.speciesid = s.speciesid LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid GROUP BY sha.implementedactionid) tgts ON ia.implementedactionid = tgts.implementedactionid ORDER BY ia.implementedactionid DESC"
+      df <- dbGetQuery(db, q)
+      if(nrow(df) > 0) df$`Impl. Progress` <- sapply(df$`Impl. Progress`, get_status_badge)
+      df
+    })
+    
+    output$all_actions_table <- renderDT({
+      datatable(all_actions_data(), escape = FALSE, selection = "single", rownames = F, options = list(
+        dom = 'ftip', pageLength = 15, scrollY = "calc(100vh - 280px)", scrollCollapse = TRUE, info = FALSE, columnDefs = list(list(visible = F, targets = c(0)))
+      ))
+    })
+    
+    proxy_all_actions_table <- dataTableProxy("all_actions_table")
+    
+    observeEvent(input$all_actions_table_rows_selected, {
       req(input$all_actions_table_rows_selected)
       impl_id <- all_actions_data()[input$all_actions_table_rows_selected, "implementedactionid"]
+      action_name <- all_actions_data()[input$all_actions_table_rows_selected, "Action"]
       
-      # THE FIX: Updated query to fetch the color_hex from the lookup tables
-      q <- "SELECT actiondate::date AS d, 
-                   a.implementation_progress AS ip, 
-                   a.result_progress AS rp, 
-                   COALESCE(ip_lkup.color_hex, '#FFFFFF') AS ip_color,
-                   COALESCE(rp_lkup.color_hex, '#FFFFFF') AS rp_color,
-                   a.what_done, a.what_learned, a.what_needed, 
-                   COALESCE(p.first_name || ' ' || p.last_name, a.createdby) AS u 
-            FROM track.actiontracking a 
-            LEFT JOIN public.profiles p ON a.createdby = p.id::text 
-            LEFT JOIN lkup.implementation_progress ip_lkup ON a.implementation_progress = ip_lkup.progress_name
-            LEFT JOIN lkup.result_progress rp_lkup ON a.result_progress = rp_lkup.result_name
-            WHERE a.implementedactionid = $1 ORDER BY a.actiondate DESC LIMIT 1"
-      
-      res <- dbGetQuery(db, q, params = list(as.integer(impl_id)))
-      
-      if(nrow(res) == 0) return(p(em("No updates logged.")))
-      
-      # Determine text color for contrast (white text for dark red and dark green)
-      ip_text_col <- if(res$ip_color %in% c("#FF4040", "#228B22")) "white" else "black"
-      rp_text_col <- if(res$rp_color %in% c("#FF4040", "#228B22")) "white" else "black"
-      
-      # Create the Bootstrap Badges
-      ip_badge <- span(class = "badge text-wrap", style = paste0("background-color: ", res$ip_color, "; color: ", ip_text_col, "; font-size: 0.9em; padding: 6px 10px; border: 1px solid #ccc; border-radius: 5px;"), res$ip)
-      rp_badge <- span(class = "badge text-wrap", style = paste0("background-color: ", res$rp_color, "; color: ", rp_text_col, "; font-size: 0.9em; padding: 6px 10px; border: 1px solid #ccc; border-radius: 5px;"), res$rp)
-      
-      tagList(
-        p(class = "mb-3 text-muted", strong("Date: "), res$d, span(style="margin: 0 10px;", "|"), strong("User: "), res$u),
+      showModal(modalDialog(
+        title = h4(strong(action_name), class="mb-0", style="color: #07234C;"),
+        size = "xl", easyClose = TRUE, fade = TRUE,
+        footer = tagList(actionButton(ns("btn_close_all_actions_modal"), "Close Profile", class = "btn-secondary")),
         
-        div(class = "mb-4",
-            div(style = "margin-bottom: 8px; display: flex; align-items: center;", strong("Impl. Progress: ", style="margin-right: 10px;"), ip_badge),
-            div(style = "display: flex; align-items: center;", strong("Effectiveness: ", style="margin-right: 10px;"), rp_badge)
-        ),
-        
-        if(!is.na(res$what_done) && res$what_done != "") p(strong("What was done? "), br(), em(res$what_done)) else NULL,
-        if(!is.na(res$what_learned) && res$what_learned != "") p(strong("What was learned? "), br(), em(res$what_learned)) else NULL,
-        if(!is.na(res$what_needed) && res$what_needed != "") p(strong("What is needed? "), br(), em(res$what_needed)) else NULL
-      )
+        navset_underline(
+          id = ns("all_actions_modal_tabs"),
+          nav_panel("Action Overview", value = "overview", div(class="mt-4", layout_columns(div(class = "card shadow-sm border-0 mb-3", div(class = "card-header bg-light fw-bold", "Details"), div(class = "card-body", uiOutput(ns("all_modal_details")))), div(class = "card shadow-sm border-0 mb-3", div(class = "card-header bg-light fw-bold", "Targets & Mitigated Threats"), div(class = "card-body", uiOutput(ns("all_modal_threats"))))))),
+          nav_panel("Progress Logs", value = "logs", div(class="mt-4", div(class = "card shadow-sm border-0 mb-3", div(class = "card-header text-white fw-bold", style = "background-color: #055A53;", "Historical Progress Logs"), div(class = "card-body", DTOutput(ns("all_modal_history_table")))))),
+          nav_panel("Spatial Footprint", value = "spatial", div(class="mt-4 card shadow-sm border-0", div(class="card-body", layout_columns(div(class="p-2 text-center rounded border", style="background-color: #F8F9FA;", h6("Scale Category", class="text-muted mb-0"), h5(textOutput(ns("all_modal_map_scale")), class="mb-0 fw-bold", style="color:#0D67B8;")), div(class="p-2 text-center rounded border", style="background-color: #F8F9FA;", h6("Approx. Area", class="text-muted mb-0"), h5(textOutput(ns("all_modal_map_area")), class="mb-0 fw-bold", style="color:#055A53;"))), div(class="mt-3 border rounded", leafletOutput(ns("all_modal_map"), height="500px")))))
+        )
+      ))
+    })
+    
+    observeEvent(input$btn_close_all_actions_modal, { removeModal(); selectRows(proxy_all_actions_table, NULL) })
+    
+    output$all_modal_details <- renderUI({
+      req(input$all_actions_table_rows_selected); impl_id <- all_actions_data()[input$all_actions_table_rows_selected, "implementedactionid"]
+      row <- dbGetQuery(db, "SELECT actiondesc, implementation_progress, result_progress FROM track.implementedactions WHERE implementedactionid = $1", params = list(as.integer(impl_id)))
+      desc <- if(is.na(row$actiondesc) || row$actiondesc=="") "No description provided." else row$actiondesc
+      tagList(p(strong("Description: "), desc), p(strong("Implementation: "), HTML(get_status_badge(row$implementation_progress))), p(strong("Effectiveness: "), HTML(get_status_badge(row$result_progress))))
+    })
+    
+    output$all_modal_threats <- renderUI({
+      req(input$all_actions_table_rows_selected); impl_id <- all_actions_data()[input$all_actions_table_rows_selected, "implementedactionid"]
+      q <- "SELECT l2.threatl2code || '. ' || l2.threatl2name AS threat_name, ta.justification, ta.alternative_category, ta.justification_text, CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_name, ta.threatl2id FROM track.threatsaddressed ta JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id LEFT JOIN proj.species s ON sha.speciesid = s.speciesid LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid WHERE sha.implementedactionid = $1 ORDER BY threat_name ASC, target_name ASC"
+      threats_df <- dbGetQuery(db, q, params = list(as.integer(impl_id)))
+      if(nrow(threats_df) > 0) {
+        threats_df$group_name <- ifelse(threats_df$threatl2id == 59, paste0("Broader Goal: ", threats_df$alternative_category), threats_df$threat_name)
+        tags$ul(class = "mt-2 mb-0", lapply(unique(threats_df$group_name), function(g) {
+          sub_df <- threats_df[threats_df$group_name == g, ]; is_broader <- sub_df$threatl2id[1] == 59
+          title <- if(is_broader) strong("Broader Goal: ", style="color: #0D67B8;", sub_df$alternative_category[1]) else strong(sub_df$threat_name[1])
+          t_list <- tags$ul(class="mt-1 mb-3", style="list-style-type:circle;", lapply(1:nrow(sub_df), function(i) tags$li(span(class="text-primary fw-bold", sub_df$target_name[i]), " - ", em(if(is_broader) sub_df$justification_text[i] else sub_df$justification[i]))))
+          tags$li(class="mb-2", title, t_list)
+        }))
+      } else { p(em("No threats recorded.")) }
+    })
+    
+    output$all_modal_history_table <- renderDT({
+      req(input$all_actions_table_rows_selected); impl_id <- all_actions_data()[input$all_actions_table_rows_selected, "implementedactionid"]
+      q <- "SELECT TO_CHAR(a.actiondate, 'MM/DD/YYYY') AS \"Date\", a.implementation_progress AS \"Impl. Progress\", a.result_progress AS \"Effectiveness\", a.what_done AS \"What was done?\", COALESCE(p.first_name || ' ' || p.last_name, a.createdby) AS \"Entered By\" FROM track.actiontracking a LEFT JOIN public.profiles p ON a.createdby = p.id::text WHERE a.implementedactionid = $1 ORDER BY a.actiondate DESC"
+      datatable(dbGetQuery(db, q, params=list(as.integer(impl_id))), rownames = FALSE, options = list(dom = 't', paging = FALSE, scrollY = "400px", scrollCollapse = TRUE))
+    })
+    
+    all_modal_spatial_data <- reactive({
+      req(input$all_actions_table_rows_selected); impl_id <- all_actions_data()[input$all_actions_table_rows_selected, "implementedactionid"]
+      dbGetQuery(db, "SELECT scale_category, ST_AsGeoJSON(geom) as geojson, ST_Area(geom::geography) * 0.000247105 AS acres FROM track.action_spatial WHERE implementedactionid = $1", params = list(as.integer(impl_id)))
+    })
+    
+    output$all_modal_map_scale <- renderText({ df <- all_modal_spatial_data(); if(nrow(df) > 0 && !is.na(df$scale_category)) df$scale_category else "Statewide" })
+    output$all_modal_map_area <- renderText({ 
+      df <- all_modal_spatial_data()
+      scale <- if(nrow(df) > 0 && !is.na(df$scale_category)) df$scale_category else "Statewide"
+      if (scale == "Statewide") return("~66,600,000 Acres (Statewide)")
+      if(nrow(df) > 0 && !is.na(df$acres)) format_acres(df$acres) else "N/A" 
+    })
+    
+    output$all_modal_map <- renderLeaflet({
+      req(input$all_actions_modal_tabs == "spatial"); df <- all_modal_spatial_data()
+      scale <- if(nrow(df) > 0 && !is.na(df$scale_category)) df$scale_category else "Statewide"
+      
+      m <- leaflet() %>% setView(lng = -105.5, lat = 39.0, zoom = 6) %>% addProviderTiles(providers$Esri.WorldTopoMap, group="Terrain") %>% addProviderTiles(providers$Esri.WorldImagery, group="Satellite") %>% addLayersControl(baseGroups=c("Terrain", "Satellite"), options=layersControlOptions(collapsed=FALSE))
+      
+      if (scale == "Statewide") {
+        m <- draw_statewide_map(m)
+      } else if(nrow(df) > 0 && !is.na(df$geojson)) {
+        tryCatch({
+          geo_sf <- sf::st_as_sfc(df$geojson, GeoJSON=TRUE) %>% sf::st_sf(crs=4326) %>% sf::st_make_valid()
+          if(nrow(geo_sf) > 0) { m <- m %>% addPolygons(data=geo_sf, color="#EAB11E", fillColor="#EAB11E", fillOpacity=0.5, weight=2) }
+        }, error=function(e){ print(e) })
+      }
+      m
     })
     
     # -----------------------------------------------------
@@ -1004,8 +708,9 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       return(df)
     })
     
-    # --- 4A. Plotly Sankey (Action -> Target -> Threat) ---
+    # --- 4A. Plotly Sankey ---
     output$sankey_plot <- renderPlotly({
+      req(input$conn_nav_tabs == "sankey") # Wait until tab is active!
       df <- links_data(); req(nrow(df) > 0)
       
       df <- df %>% mutate(
@@ -1053,15 +758,14 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       ) %>% config(displayModeBar = FALSE)
     })
     
-    # --- 4B. Interactive Circular Hierarchy (Sunburst Style) ---
+    # --- 4B. Interactive Chord Graph ---
     output$bipartite_plot <- renderGirafe({
+      req(input$conn_nav_tabs == "bipartite") # Wait until tab is active!
       df <- links_data()
       
-      # 1. Fetch Full Lexicon with correct nesting
       q_act <- "SELECT l0a.actionl0id, TRIM(COALESCE(l0a.actionl0name, 'Unknown')) AS l0, l1a.actionl1id, TRIM(COALESCE(l1a.actionl1name, 'Unknown')) AS l1, l2a.actionl2id, TRIM(l2a.actionl2code) AS code, TRIM(l2a.actionl2name) AS name FROM proj.l2_actions l2a LEFT JOIN proj.l1_actions l1a ON l2a.actionl1id = l1a.actionl1id LEFT JOIN proj.l0_actions l0a ON l1a.actionl0id = l0a.actionl0id"
       q_thr <- "SELECT l0t.threatl0id, TRIM(COALESCE(l0t.threatl0name, 'Unknown')) AS l0, l1t.threatl1id, TRIM(COALESCE(l1t.threatl1name, 'Unknown')) AS l1, l2t.threatl2id, TRIM(l2t.threatl2code) AS code, TRIM(l2t.threatl2name) AS name FROM proj.l2_threats l2t LEFT JOIN proj.l1_threats l1t ON l2t.threatl1id = l1t.threatl1id LEFT JOIN proj.l0_threats l0t ON l1t.threatl0id = l0t.threatl0id"
       
-      # Force perfectly numerical sort
       actions <- dbGetQuery(db, q_act) %>% filter(!l0 %in% c("D. None", "Unknown", "None"), code != "11.1") %>% 
         mutate(major_code = suppressWarnings(as.numeric(sub("\\..*", "", code))), minor_code = suppressWarnings(as.numeric(sub(".*\\.", "", code)))) %>%
         arrange(l0, major_code, minor_code) %>% mutate(type = "Action")
@@ -1070,7 +774,6 @@ dashboard_server <- function(id, db, db_sync_trigger) {
         mutate(major_code = suppressWarnings(as.numeric(sub("\\..*", "", code))), minor_code = suppressWarnings(as.numeric(sub(".*\\.", "", code)))) %>%
         arrange(l0, major_code, minor_code) %>% mutate(type = "Threat")
       
-      # 2. Calculate Angular Positions
       n_act <- nrow(actions)
       act_angles <- seq(105 * pi/180, 255 * pi/180, length.out = max(2, n_act))
       actions <- actions %>% mutate(angle = act_angles, x = cos(angle), y = sin(angle), raw_deg = angle * 180 / pi, rad_angle = raw_deg - 180, hjust = 1)
@@ -1081,7 +784,6 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       
       nodes_df <- bind_rows(actions, threats) %>% mutate(safe_id = paste0("node_", row_number()), full_text = paste(code, name, sep=" "))
       
-      # 3. Dynamic Solid Radial Spokes for L1 separators
       separators <- data.frame()
       if (n_act > 1) {
         act_bounds <- actions %>% mutate(idx = row_number()) %>% group_by(l1) %>% summarize(max_idx = max(idx), .groups="drop") %>% arrange(max_idx) %>% filter(max_idx < nrow(actions))
@@ -1096,13 +798,11 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       
       separators <- separators %>% mutate(x_in = 0.95 * cos(angle), y_in = 0.95 * sin(angle), x_out = 2.10 * cos(angle), y_out = 2.10 * sin(angle))
       
-      # 4. Ring 2: L1 Labels (Placed between spokes)
       l1_labels <- bind_rows(
         actions %>% group_by(l1) %>% summarize(angle = mean(angle), .groups="drop") %>% mutate(r = 1.35, text_angle = angle * 180/pi - 180, hjust=1),
         threats %>% group_by(l1) %>% summarize(angle = mean(angle), .groups="drop") %>% mutate(r = 1.35, text_angle = angle * 180/pi, hjust=0)
       )
       
-      # 5. Ring 3: Custom L0 Arcs (Brackets)
       l0_arcs <- bind_rows(
         actions %>% group_by(l0) %>% summarize(start = min(angle), end = max(angle), .groups="drop") %>% mutate(type="Action"),
         threats %>% group_by(l0) %>% summarize(start = min(angle), end = max(angle), .groups="drop") %>% mutate(type="Threat")
@@ -1128,10 +828,8 @@ dashboard_server <- function(id, db, db_sync_trigger) {
         hjust = 0.5
       )
       
-      # 6. Ring 4: Master Background Watermarks
       bg_labels <- data.frame(x = c(-3.1, 3.1), y = c(0, 0), label = c("ACTIONS", "THREATS"), angle = c(90, 270))
       
-      # 7. Map the active connections
       edges_df <- data.frame()
       if(nrow(df) > 0) {
         edges_df <- df %>%
@@ -1140,24 +838,15 @@ dashboard_server <- function(id, db, db_sync_trigger) {
           mutate(hover_text = paste0("<b>Target:</b> ", target_name, " (", group_context, ")<br><b>Action:</b> ", actionl2code, " ", source_name, "<br><b>Threat:</b> ", threatl2code, " ", threat_name), safe_edge_id = paste0("edge_", row_number()))
       }
       
-      # 8. Build the Plot
       p <- ggplot() +
         geom_text(data = bg_labels, aes(x=x, y=y, label=label, angle=angle), size=14, color="grey90", fontface="bold") +
         geom_segment(data=separators, aes(x=x_in, y=y_in, xend=x_out, yend=y_out), color="grey70", linewidth=0.5, linetype="dashed")
       
       if(nrow(edges_df) > 0) {
-        # We use the 'hover_css' and 'tooltip' to define the interaction 
-        # but rely on the CSS in girafe() to manage the visual thickness.
         p <- p + geom_curve_interactive(
           data = edges_df, 
-          aes(x = x1, y = y1, xend = x2, yend = y2, 
-              color = group_context, 
-              linetype = target_type, 
-              tooltip = hover_text, 
-              data_id = safe_edge_id), 
-          curvature = 0.1, 
-          alpha = 0.6, 
-          linewidth = 0.3
+          aes(x = x1, y = y1, xend = x2, yend = y2, color = group_context, linetype = target_type, tooltip = hover_text, data_id = safe_edge_id), 
+          curvature = 0.1, alpha = 0.6, linewidth = 0.3
         )
       }
       
@@ -1172,56 +861,26 @@ dashboard_server <- function(id, db, db_sync_trigger) {
         labs(caption = "💡 Click the magnifying glass (without the box) in the top right to enable click-and-drag panning.") +
         expand_limits(x = c(-3.6, 3.6), y = c(-2.8, 2.8)) + 
         theme_void() +
-        theme(
-          legend.position = "right", 
-          legend.box = "vertical", 
-          legend.title = element_text(face = "bold"), 
-          plot.caption = element_text(color = "grey40", size = 11, face = "italic", hjust = 0.5),
-          plot.margin = margin(10, 10, 10, 10)
-        )
+        theme(legend.position = "right", legend.box = "vertical", legend.title = element_text(face = "bold"), plot.caption = element_text(color = "grey40", size = 11, face = "italic", hjust = 0.5), plot.margin = margin(10, 10, 10, 10))
       
-      # Build the final Girafe object
       girafe(ggobj = p, width_svg = 18, height_svg = 12,
-             options = list(
-               opts_sizing(rescale = TRUE, width = 1),
-               opts_zoom(min = 1, max = 10),
-               opts_toolbar(position = "topright", saveaspng = TRUE),
-               
-               opts_hover(css = "stroke:black;stroke-width:1.5px;cursor:pointer;stroke-opacity:1;opacity:1;"),
-               opts_hover_inv(css = "opacity:0.8;"),
-               opts_tooltip(css = "background-color:white;color:black;padding:10px;border-radius:5px;box-shadow:2px 2px 5px rgba(0,0,0,0.3);")
-             ))
+             options = list(opts_sizing(rescale = TRUE, width = 1), opts_zoom(min = 1, max = 10), opts_toolbar(position = "topright", saveaspng = TRUE), opts_hover(css = "stroke:black;stroke-width:1.5px;cursor:pointer;stroke-opacity:1;opacity:1;"), opts_hover_inv(css = "opacity:0.8;"), opts_tooltip(css = "background-color:white;color:black;padding:10px;border-radius:5px;box-shadow:2px 2px 5px rgba(0,0,0,0.3);")))
     })
-    # --- 4C. Absolute Domain Matrix (The Masterpiece) ---
+    
+    # --- 4C. Absolute Domain Matrix ---
     output$heatmap_plot <- renderPlotly({
+      req(input$conn_nav_tabs == "heatmap") # Wait until tab is active!
       df <- links_data()
       
-      # 1. Pull lexicon
       q_act <- "SELECT l0a.actionl0id, TRIM(COALESCE(l0a.actionl0name, 'Unknown')) AS l0, l1a.actionl1id, TRIM(COALESCE(l1a.actionl1name, 'Unknown')) AS l1, l2a.actionl2id, TRIM(COALESCE(l2a.actionl2code, 'Uncoded')) AS l2c, TRIM(COALESCE(l2a.actionl2name, 'Unknown')) AS l2n FROM proj.l2_actions l2a LEFT JOIN proj.l1_actions l1a ON l2a.actionl1id = l1a.actionl1id LEFT JOIN proj.l0_actions l0a ON l1a.actionl0id = l0a.actionl0id"
       q_thr <- "SELECT l0t.threatl0id, TRIM(COALESCE(l0t.threatl0name, 'Unknown')) AS l0, l1t.threatl1id, TRIM(COALESCE(l1t.threatl1name, 'Unknown')) AS l1, l2t.threatl2id, TRIM(COALESCE(l2t.threatl2code, 'Uncoded')) AS l2c, TRIM(COALESCE(l2t.threatl2name, 'Unknown')) AS l2n FROM proj.l2_threats l2t LEFT JOIN proj.l1_threats l1t ON l2t.threatl1id = l1t.threatl1id LEFT JOIN proj.l0_threats l0t ON l1t.threatl0id = l0t.threatl0id"
       
-      # Force perfectly numerical sorting (8, 9, 10, 11)
-      y_axis_df <- dbGetQuery(db, q_act) %>% 
-        filter(!l0 %in% c("D. None", "Unknown", "None"), l2c != "11.1") %>% 
-        mutate(
-          major_code = suppressWarnings(as.numeric(sub("\\..*", "", l2c))),
-          minor_code = suppressWarnings(as.numeric(sub(".*\\.", "", l2c)))
-        ) %>%
-        arrange(l0, major_code, minor_code)
+      y_axis_df <- dbGetQuery(db, q_act) %>% filter(!l0 %in% c("D. None", "Unknown", "None"), l2c != "11.1") %>% mutate(major_code = suppressWarnings(as.numeric(sub("\\..*", "", l2c))), minor_code = suppressWarnings(as.numeric(sub(".*\\.", "", l2c)))) %>% arrange(l0, major_code, minor_code)
+      x_axis_df <- dbGetQuery(db, q_thr) %>% filter(!grepl("\\.9$", l2c), !l0 %in% c("Unknown Threats", "Unknown", "None"), threatl1id != 4) %>% mutate(major_code = suppressWarnings(as.numeric(sub("\\..*", "", l2c))), minor_code = suppressWarnings(as.numeric(sub(".*\\.", "", l2c)))) %>% arrange(l0, major_code, minor_code)
       
-      x_axis_df <- dbGetQuery(db, q_thr) %>% 
-        filter(!grepl("\\.9$", l2c), !l0 %in% c("Unknown Threats", "Unknown", "None"), threatl1id != 4) %>% 
-        mutate(
-          major_code = suppressWarnings(as.numeric(sub("\\..*", "", l2c))),
-          minor_code = suppressWarnings(as.numeric(sub(".*\\.", "", l2c)))
-        ) %>%
-        arrange(l0, major_code, minor_code)
-      
-      # Lock factor levels
       y_axis_df$l2c_factor <- factor(y_axis_df$l2c, levels = unique(y_axis_df$l2c))
       x_axis_df$l2c_factor <- factor(x_axis_df$l2c, levels = unique(x_axis_df$l2c))
       
-      # 2. Compile Main Grid Counts
       actual_counts <- data.frame()
       if (nrow(df) > 0) {
         actual_counts <- df %>% group_by(actionl2id, threatl2id) %>% summarize(total_logs = n(), target_count = n_distinct(target_name), target_list = paste(sort(unique(target_name)), collapse = ", "), .groups = "drop")
@@ -1246,203 +905,41 @@ dashboard_server <- function(id, db, db_sync_trigger) {
         }
       }
       
-      # 3. Generate distinct color IDs
       y_axis_df$l0_z <- as.numeric(factor(y_axis_df$l0, levels = unique(y_axis_df$l0)))
       y_axis_df$l1_z <- as.numeric(factor(y_axis_df$l1, levels = unique(y_axis_df$l1))) + max(y_axis_df$l0_z)
-      
       x_axis_df$l0_z <- as.numeric(factor(x_axis_df$l0, levels = unique(x_axis_df$l0))) + max(y_axis_df$l1_z)
       x_axis_df$l1_z <- as.numeric(factor(x_axis_df$l1, levels = unique(x_axis_df$l1))) + max(x_axis_df$l0_z)
       
       total_cats <- max(x_axis_df$l1_z)
-      
       z_left <- cbind(y_axis_df$l0_z, y_axis_df$l1_z)
       z_bottom <- rbind(x_axis_df$l0_z, x_axis_df$l1_z)
-      
       hover_left <- cbind(paste("Level 0 Action:", y_axis_df$l0), paste("Level 1 Action:", y_axis_df$l1))
       hover_bottom <- rbind(paste("Level 0 Threat:", x_axis_df$l0), paste("Level 1 Threat:", x_axis_df$l1))
       
-      # 4. Custom Scales
-      cpw_main_scale <- list(
-        c(0, "white"),          
-        c(0.001, "#9ecae1"),    
-        c(1, "#07234c")         
-      )
-      
+      cpw_main_scale <- list(c(0, "white"), c(0.001, "#9ecae1"), c(1, "#07234c"))
       base_colors <- c("#8DD3C7", "#FFFFB3", "#BEBADA", "#FB8072", "#80B1D3", "#FDB462", "#B3DE69", "#FCCDE5", "#D9D9D9", "#BC80BD", "#CCEBC5", "#FFED6F", "#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99", "#E31A1C", "#FDBF6F", "#FF7F00", "#CAB2D6", "#6A3D9A", "#FFFF99", "#B15928")
       full_palette <- colorRampPalette(base_colors)(total_cats)
-      axis_colorscale <- list()
-      for(i in 1:total_cats) { axis_colorscale[[i]] <- c((i-1)/(total_cats-1), full_palette[i]) }
+      axis_colorscale <- list(); for(i in 1:total_cats) { axis_colorscale[[i]] <- c((i-1)/(total_cats-1), full_palette[i]) }
       
-      # 5. Text Annotations
       helper_wrap <- function(x, w) gsub("\n", "<br>", stringr::str_wrap(x, width = w))
       ann_list <- list()
-      
-      # THE FIX: Decoupled Main Axis Titles safely tucked within the expanded margins
       ann_list[[length(ann_list)+1]] <- list(xref="paper", yref="paper", x=0.56, y=-0.8, text="<b>Level 2 Threats</b>", showarrow=FALSE, font=list(size=14, color="black"))
       ann_list[[length(ann_list)+1]] <- list(xref="paper", yref="paper", x=-0.08, y=0.56, text="<b>Level 2 Actions</b>", textangle=-90, showarrow=FALSE, font=list(size=14, color="black"))
       
       l0_blocks <- y_axis_df %>% mutate(idx = row_number() - 1) %>% group_by(l0) %>% summarize(mid = mean(idx), .groups="drop")
       for(i in 1:nrow(l0_blocks)) { ann_list[[length(ann_list)+1]] <- list(xref="x2", yref="y2", x=0, y=l0_blocks$mid[i], text=paste0("<b>", helper_wrap(l0_blocks$l0[i], 12), "</b>"), textangle=-90, showarrow=FALSE, font=list(size=10, color="black")) }
-      
       l1_blocks <- y_axis_df %>% mutate(idx = row_number() - 1) %>% group_by(l1) %>% summarize(mid = mean(idx), .groups="drop")
       for(i in 1:nrow(l1_blocks)) { ann_list[[length(ann_list)+1]] <- list(xref="x2", yref="y2", x=1, y=l1_blocks$mid[i], text=paste0("<b>", helper_wrap(l1_blocks$l1[i], 18), "</b>"), textangle=0, showarrow=FALSE, font=list(size=8, color="black")) }
-      
       l0_t_blocks <- x_axis_df %>% mutate(idx = row_number() - 1) %>% group_by(l0) %>% summarize(mid = mean(idx), .groups="drop")
       for(i in 1:nrow(l0_t_blocks)) { ann_list[[length(ann_list)+1]] <- list(xref="x3", yref="y3", x=l0_t_blocks$mid[i], y=0, text=paste0("<b>", l0_t_blocks$l0[i], "</b>"), textangle=0, showarrow=FALSE, font=list(size=10, color="black")) }
-      
       l1_t_blocks <- x_axis_df %>% mutate(idx = row_number() - 1) %>% group_by(l1) %>% summarize(mid = mean(idx), .groups="drop")
       for(i in 1:nrow(l1_t_blocks)) { ann_list[[length(ann_list)+1]] <- list(xref="x3", yref="y3", x=l1_t_blocks$mid[i], y=1, text=paste0("<b>", helper_wrap(l1_t_blocks$l1[i], 18), "</b>"), textangle=0, showarrow=FALSE, font=list(size=8, color="black")) }
       
-      # 6. Build the Locked Traces
       plot_ly() %>%
-        add_trace(
-          type = "heatmap", x = x_axis_df$l2c_factor, y = y_axis_df$l2c_factor, z = z_main, text = text_main,
-          hoverinfo = "text", colorscale = cpw_main_scale, xaxis = "x", yaxis = "y",
-          xgap = 1, ygap = 1,
-          colorbar = list(title="<b>Distinct<br>Species/Habitats</b>", x=1.02, y=0.5, yanchor="middle", len=0.6, dtick=1) 
-        ) %>%
-        add_trace(
-          type = "heatmap", x = c("L0 Action", "L1 Action"), y = y_axis_df$l2c_factor, z = z_left, text = hover_left,
-          hoverinfo = "text", zmin=1, zmax=total_cats, colorscale = axis_colorscale, showscale = FALSE, xaxis = "x2", yaxis = "y2",
-          xgap = 0, ygap = 0 
-        ) %>%
-        add_trace(
-          type = "heatmap", x = x_axis_df$l2c_factor, y = c("L0 Threat", "L1 Threat"), z = z_bottom, text = hover_bottom,
-          hoverinfo = "text", zmin=1, zmax=total_cats, colorscale = axis_colorscale, showscale = FALSE, xaxis = "x3", yaxis = "y3",
-          xgap = 0, ygap = 0 
-        ) %>%
-        layout(
-          plot_bgcolor = "black",   
-          paper_bgcolor = "white",  
-          annotations = ann_list,
-          
-          # White masks dropping beneath the axes
-          shapes = list(
-            list(type = "rect", x0 = 0.07, x1 = 0.11, xref = "paper", y0 = 0, y1 = 1, yref = "paper", fillcolor = "white", line = list(color = "white"), layer = "below"),
-            list(type = "rect", x0 = 0, x1 = 1, xref = "paper", y0 = 0.07, y1 = 0.11, yref = "paper", fillcolor = "white", line = list(color = "white"), layer = "below"),
-            list(type = "rect", x0 = 0, x1 = 0.11, xref = "paper", y0 = 0, y1 = 0.11, yref = "paper", fillcolor = "white", line = list(color = "white"), layer = "below")
-          ),
-          
-          # THE FIX: `range` explicitly prevents Plotly from adding 5% padding. The Black Borders are dead!
-          xaxis  = list(domain = c(0.11, 1.0), type = "category", side = "bottom", showticklabels = TRUE, tickangle = 0, tickfont = list(color="black", size=11, face="bold"), fixedrange = TRUE, title = "", range = c(-0.5, nrow(x_axis_df) - 0.5)),
-          yaxis  = list(domain = c(0.11, 1.0), type = "category", side = "left", showticklabels = TRUE, tickfont = list(color="black", size=11, face="bold"), fixedrange = TRUE, title = "", range = c(-0.5, nrow(y_axis_df) - 0.5)),
-          
-          # Left Blocks (Range restricted from -0.5 to 1.5 because there are 2 columns)
-          xaxis2 = list(domain = c(0.0, 0.07), type = "category", showticklabels = FALSE, fixedrange = TRUE, range = c(-0.5, 1.5)),
-          yaxis2 = list(domain = c(0.11, 1.0), type = "category", side = "left", showticklabels = FALSE, matches = "y", fixedrange = TRUE),
-          
-          # Bottom Blocks (Range restricted from -0.5 to 1.5 because there are 2 rows)
-          xaxis3 = list(domain = c(0.11, 1.0), type = "category", showticklabels = FALSE, matches = "x", fixedrange = TRUE),
-          yaxis3 = list(domain = c(0.0, 0.07), type = "category", showticklabels = FALSE, fixedrange = TRUE, range = c(-0.5, 1.5)),
-          
-          # Increased Left Margin for the Actions Label
-          margin = list(l = 150, r = 20, b = 120, t = 40)
-        ) %>% config(displayModeBar = FALSE)
-    })
-    
-    # -----------------------------------------------------
-    # TAB 5: RESOURCE LIBRARY LOGIC
-    # -----------------------------------------------------
-    # Populate the Resource Library Dropdowns
-    observe({
-      db_sync_trigger() 
-      tax_groups <- get_dash_tax_groups(db)
-      updateSelectInput(session, "res_tax_group", choices = c("Select group..." = "", tax_groups$groupname))
-      habitats <- get_dash_major_habitats(db)
-      updateSelectInput(session, "res_major_hab", choices = c("Select habitat..." = "", habitats$majorhabitatname))
-    })
-    
-    # THE FIX: Filter Species dropdown by existence of resources in either table
-    observeEvent(input$res_tax_group, {
-      req(input$res_tax_group)
-      query <- "
-        SELECT s.speciesid, s.commonname 
-        FROM proj.species s 
-        JOIN proj.taxonomicgroups tg ON s.taxonomicgroupid = tg.taxonomicgroupid 
-        WHERE tg.groupname = $1 
-          AND (
-            EXISTS (SELECT 1 FROM track.speciesresources sr WHERE sr.speciesid = s.speciesid)
-            OR EXISTS (SELECT 1 FROM proj.SpeciesExistingActionsLinks sl WHERE sl.\"SpeciesID\" = s.speciesid)
-          )
-        ORDER BY s.commonname
-      "
-      res <- dbGetQuery(db, query, params = list(input$res_tax_group))
-      updateSelectizeInput(session, "res_species", choices = c("Choose species..." = "", setNames(res$speciesid, res$commonname)))
-    })
-    
-    # THE FIX: Filter Habitat dropdown by existence of resources in either table
-    observeEvent(input$res_major_hab, {
-      req(input$res_major_hab)
-      query <- "
-        SELECT hs.habitatsubtypeid, hs.habitatsubtypename 
-        FROM proj.habitatsubtypes hs 
-        JOIN proj.majorhabitats mh ON hs.majorhabitatid = mh.majorhabitatid 
-        WHERE mh.majorhabitatname = $1 
-          AND (
-            EXISTS (SELECT 1 FROM track.habitatresources hr WHERE hr.habitatsubtypeid = hs.habitatsubtypeid)
-            OR EXISTS (SELECT 1 FROM proj.HabitatExistingActionsLinks hl WHERE hl.\"HabitatSubtypeID\" = hs.habitatsubtypeid)
-          )
-        ORDER BY hs.habitatsubtypename
-      "
-      res <- dbGetQuery(db, query, params = list(input$res_major_hab))
-      updateSelectizeInput(session, "res_habitat", choices = c("Choose subtype..." = "", setNames(res$habitatsubtypeid, res$habitatsubtypename)))
-    })
-    
-    # Query and Render the Resources into Two Containers
-    output$res_library_content <- renderUI({
-      db_sync_trigger()
-      is_sp <- input$res_type == "Species"
-      tid <- if(is_sp) input$res_species else input$res_habitat
-      
-      if (is.null(tid) || tid == "") return(p(class="text-muted text-center mt-5", "Select a target on the left to view available resources."))
-      
-      # 1. Query SWAP Resources (Old 'proj' schema)
-      q_swap <- if(is_sp) {
-        "SELECT \"Hyperlink Name\" AS name, \"Type\" AS type, \"Hyperlink URL\" AS url FROM proj.SpeciesExistingActionsLinks WHERE \"SpeciesID\" = $1 ORDER BY name"
-      } else {
-        "SELECT \"Hyperlink Name\" AS name, \"Type\" AS type, \"Hyperlink URL\" AS url FROM proj.HabitatExistingActionsLinks WHERE \"HabitatSubtypeID\" = $1 ORDER BY name"
-      }
-      swap_data <- dbGetQuery(db, q_swap, params = list(as.integer(tid)))
-      
-      # 2. Query Additional Resources (New 'track' schema)
-      q_add <- if(is_sp) {
-        "SELECT resource_name AS name, resource_type AS type, resource_url AS url FROM track.speciesresources WHERE speciesid = $1 ORDER BY name"
-      } else {
-        "SELECT resource_name AS name, resource_type AS type, resource_url AS url FROM track.habitatresources WHERE habitatsubtypeid = $1 ORDER BY name"
-      }
-      add_data <- dbGetQuery(db, q_add, params = list(as.integer(tid)))
-      
-      if(nrow(swap_data) == 0 && nrow(add_data) == 0) return(p(class="text-muted", "No resources have been added for this selection yet."))
-      
-      # Helper function to generate clean HTML lists
-      build_resource_list <- function(data) {
-        if(nrow(data) == 0) return(p(class="text-muted mb-3", em("No resources in this category.")))
-        
-        tags$ul(class = "list-group list-group-flush mb-4",
-                lapply(1:nrow(data), function(i) {
-                  # Use PDF icon for documents/plans, link icon for everything else
-                  icon_html <- if(grepl("Document|Plan|Outline", data$type[i], ignore.case=TRUE)) icon("file-pdf") else icon("link")
-                  
-                  tags$li(class = "list-group-item px-0", style="background-color: transparent;",
-                          icon_html, 
-                          tags$a(href = data$url[i], target = "_blank", style = "margin-left: 10px; font-weight: bold; color: #0D67B8; text-decoration: none;", data$name[i]),
-                          span(style = "color: grey; font-size: 0.85em; margin-left: 10px;", paste0("(", data$type[i], ")"))
-                  )
-                })
-        )
-      }
-      
-      # Assemble the UI with two distinct sections
-      tagList(
-        div(
-          h5("SWAP Resources", style = "color: #055A53; font-weight: bold; border-bottom: 2px solid #ECE8E4; padding-bottom: 5px;"),
-          build_resource_list(swap_data)
-        ),
-        div(
-          h5("Additional Resources", style = "color: #AA5F40; font-weight: bold; border-bottom: 2px solid #ECE8E4; padding-bottom: 5px;"),
-          build_resource_list(add_data)
-        )
-      )
+        add_trace(type = "heatmap", x = x_axis_df$l2c_factor, y = y_axis_df$l2c_factor, z = z_main, text = text_main, hoverinfo = "text", colorscale = cpw_main_scale, xaxis = "x", yaxis = "y", xgap = 1, ygap = 1, colorbar = list(title="<b>Distinct<br>Species/Habitats</b>", x=1.02, y=0.5, yanchor="middle", len=0.6, dtick=1)) %>%
+        add_trace(type = "heatmap", x = c("L0 Action", "L1 Action"), y = y_axis_df$l2c_factor, z = z_left, text = hover_left, hoverinfo = "text", zmin=1, zmax=total_cats, colorscale = axis_colorscale, showscale = FALSE, xaxis = "x2", yaxis = "y2", xgap = 0, ygap = 0) %>%
+        add_trace(type = "heatmap", x = x_axis_df$l2c_factor, y = c("L0 Threat", "L1 Threat"), z = z_bottom, text = hover_bottom, hoverinfo = "text", zmin=1, zmax=total_cats, colorscale = axis_colorscale, showscale = FALSE, xaxis = "x3", yaxis = "y3", xgap = 0, ygap = 0) %>%
+        layout(plot_bgcolor = "black", paper_bgcolor = "white", annotations = ann_list, shapes = list(list(type = "rect", x0 = 0.07, x1 = 0.11, xref = "paper", y0 = 0, y1 = 1, yref = "paper", fillcolor = "white", line = list(color = "white"), layer = "below"), list(type = "rect", x0 = 0, x1 = 1, xref = "paper", y0 = 0.07, y1 = 0.11, yref = "paper", fillcolor = "white", line = list(color = "white"), layer = "below"), list(type = "rect", x0 = 0, x1 = 0.11, xref = "paper", y0 = 0, y1 = 0.11, yref = "paper", fillcolor = "white", line = list(color = "white"), layer = "below")), xaxis  = list(domain = c(0.11, 1.0), type = "category", side = "bottom", showticklabels = TRUE, tickangle = 0, tickfont = list(color="black", size=11, face="bold"), fixedrange = TRUE, title = "", range = c(-0.5, nrow(x_axis_df) - 0.5)), yaxis  = list(domain = c(0.11, 1.0), type = "category", side = "left", showticklabels = TRUE, tickfont = list(color="black", size=11, face="bold"), fixedrange = TRUE, title = "", range = c(-0.5, nrow(y_axis_df) - 0.5)), xaxis2 = list(domain = c(0.0, 0.07), type = "category", showticklabels = FALSE, fixedrange = TRUE, range = c(-0.5, 1.5)), yaxis2 = list(domain = c(0.11, 1.0), type = "category", side = "left", showticklabels = FALSE, matches = "y", fixedrange = TRUE), xaxis3 = list(domain = c(0.11, 1.0), type = "category", showticklabels = FALSE, matches = "x", fixedrange = TRUE), yaxis3 = list(domain = c(0.0, 0.07), type = "category", showticklabels = FALSE, fixedrange = TRUE, range = c(-0.5, 1.5)), margin = list(l = 150, r = 20, b = 120, t = 40)) %>% config(displayModeBar = FALSE)
     })
     
   }) 
