@@ -43,7 +43,6 @@ profile_ui <- function(id) {
       # T2: My Actions (Everyone sees this)
       nav_panel("My Actions",
                 fluidRow(class = "mt-4",
-                         
                          column(4, 
                                 div(class = "card shadow-sm",
                                     div(class = "card-header bg-success text-white", "User Created or Delegated Actions"),
@@ -52,15 +51,13 @@ profile_ui <- function(id) {
                                     )
                                 )
                          ),
-                         
                          column(8,
                                 uiOutput(ns("action_details_ui"))
                          )
-                         
                 )
       ),
       
-      # T3: Admin Tools (UI handles the hiding logic via server output)
+      # T3: Admin Tools (Tabs will be dynamically hidden by the server if not an admin)
       nav_panel("User Management", value = "admin_users_tab",
                 uiOutput(ns("admin_users_ui"))
       ),
@@ -75,6 +72,31 @@ profile_ui <- function(id) {
 profile_server <- function(id, db, current_user, db_sync_trigger) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns 
+    
+    # -----------------------------------------------------
+    # HELPER: RESTORED ORIGINAL BADGES
+    # -----------------------------------------------------
+    get_status_badge <- function(status) {
+      if (is.null(status) || is.na(status)) return(span(class = "badge bg-secondary", "Unknown"))
+      color <- switch(status,
+                      "Completed" = "bg-success", "Achieved" = "bg-success", "On-track" = "bg-success",
+                      "Minor issues" = "bg-warning text-dark", "Partially achieved" = "bg-warning text-dark",
+                      "Major issues" = "bg-danger", "Not achieved" = "bg-danger", "Abandoned" = "bg-danger",
+                      "bg-secondary")
+      as.character(span(class = paste("badge", color), status))
+    }
+    
+    # Dynamically hide or show the Admin tabs based on the user's role
+    observe({
+      req(current_user())
+      if (current_user()$role != "admin") {
+        nav_hide(id = "profile_tabs", target = "admin_users_tab")
+        nav_hide(id = "profile_tabs", target = "admin_actions_tab")
+      } else {
+        nav_show(id = "profile_tabs", target = "admin_users_tab")
+        nav_show(id = "profile_tabs", target = "admin_actions_tab")
+      }
+    })
     
     output$admin_users_ui <- renderUI({
       req(current_user()$role == "admin")
@@ -181,20 +203,24 @@ profile_server <- function(id, db, current_user, db_sync_trigger) {
       req(current_user())
       db_sync_trigger()
       query <- "
-        SELECT DISTINCT ia.implementedactionid AS \"ID\", l2.actionl2code || '. ' || l2.actionl2name AS \"Action\", ia.status AS \"Status\"
+        SELECT DISTINCT ia.implementedactionid AS \"ID\", l2.actionl2code || '. ' || l2.actionl2name AS \"Action\", ia.implementation_progress AS \"Status\"
         FROM track.implementedactions ia
         LEFT JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id
         LEFT JOIN track.delegateusers du ON ia.implementedactionid = du.implementedactionid
         WHERE ia.createdby = $1::text OR du.userid = $1::text
+        ORDER BY \"ID\" DESC
       "
-      dbGetQuery(db, query, params = list(current_user()$user_id))
+      df <- dbGetQuery(db, query, params = list(current_user()$user_id))
+      if(nrow(df) > 0) df$Status <- sapply(df$Status, get_status_badge)
+      df
     })
     
     # Render the scrolling table
     output$user_actions_table <- renderDT({
       datatable(
         my_actions_data(), 
-        selection = 'single', # Restrict to single row selection
+        escape = FALSE,
+        selection = 'single', 
         rownames = FALSE, 
         options = list(
           paging = FALSE,          
@@ -211,7 +237,7 @@ profile_server <- function(id, db, current_user, db_sync_trigger) {
       selected_idx <- input$user_actions_table_rows_selected
       action_id <- my_actions_data()$ID[selected_idx]
       
-      q_core <- "SELECT l2.actionl2code || '. ' || l2.actionl2name AS \"Action\", ia.timeframe, ia.status, ia.actiondesc AS actiondescription 
+      q_core <- "SELECT l2.actionl2code || '. ' || l2.actionl2name AS \"Action\", ia.timeframe, ia.implementation_progress, ia.result_progress, ia.actiondesc AS actiondescription 
                  FROM track.implementedactions ia 
                  LEFT JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id 
                  WHERE ia.implementedactionid = $1"
@@ -230,6 +256,9 @@ profile_server <- function(id, db, current_user, db_sync_trigger) {
       q_thr <- "SELECT 
                   l2.threatl2code || '. ' || l2.threatl2name AS threat_name, 
                   ta.justification,
+                  ta.threatl2id,
+                  ta.alternative_category,
+                  ta.justification_text,
                   CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END AS target_label
                 FROM track.threatsaddressed ta 
                 JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid 
@@ -237,11 +266,11 @@ profile_server <- function(id, db, current_user, db_sync_trigger) {
                 LEFT JOIN proj.species s ON sha.speciesid = s.speciesid
                 LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid
                 WHERE sha.implementedactionid = $1
-                ORDER BY target_label ASC, threat_name ASC"
+                ORDER BY threat_name ASC, target_label ASC"
       
       thr_info <- dbGetQuery(db, q_thr, params = list(as.integer(action_id)))
       
-      q_log <- "SELECT p.actiondate AS logdate, p.stattype AS metric, p.stat AS value, p.comments AS notes, u.first_name, u.last_name 
+      q_log <- "SELECT TO_CHAR(p.actiondate, 'MM/DD/YYYY') AS logdate, p.implementation_progress, p.result_progress, p.what_done, u.first_name, u.last_name 
                 FROM track.actiontracking p 
                 LEFT JOIN public.profiles u ON p.createdby = u.id::text 
                 WHERE p.implementedactionid = $1 
@@ -253,12 +282,26 @@ profile_server <- function(id, db, current_user, db_sync_trigger) {
         HTML(paste0("<ul style='padding-left: 15px;'>", paste0("<li><b>", targ_info$targetname, "</b> (", targ_info$targettype, ")<br><span style='color:grey;'><i>Detail: ", ifelse(is.na(targ_info$actiondetail) | targ_info$actiondetail == "", "None", targ_info$actiondetail), "</i></span></li>", collapse = ""), "</ul>"))
       } else { HTML("<i>No targets assigned.</i>") }
       
+      # THE FIX: Group Threats by Name and nest the targets underneath
       thr_html <- if(nrow(thr_info) > 0) {
-        HTML(paste0(
-          "<ul style='padding-left: 15px;'>", 
-          paste0("<li><b>", thr_info$threat_name, "</b> <span style='color: #0D67B8; font-size: 0.9em; font-weight: bold;'>[", thr_info$target_label, "]</span><br><span style='color:grey;'><i>Justification: ", ifelse(is.na(thr_info$justification) | trimws(thr_info$justification) == "", "None", thr_info$justification), "</i></span></li><br>", collapse = ""), 
-          "</ul>"
-        ))
+        thr_info$group_name <- ifelse(thr_info$threatl2id == 59, paste0("Broader Goal: ", thr_info$alternative_category), thr_info$threat_name)
+        unique_groups <- unique(thr_info$group_name)
+        
+        HTML(paste0("<ul style='padding-left: 15px;'>", 
+                    paste0(lapply(unique_groups, function(g) {
+                      sub_df <- thr_info[thr_info$group_name == g, ]
+                      is_broader <- sub_df$threatl2id[1] == 59
+                      title <- if(is_broader) paste0("<span style='color: #0D67B8;'>Broader Goal: ", sub_df$alternative_category[1], "</span>") else sub_df$threat_name[1]
+                      
+                      t_list <- paste0("<ul style='list-style-type:circle; margin-top: 5px; margin-bottom: 15px;'>",
+                                       paste0(lapply(1:nrow(sub_df), function(i) {
+                                         just_text <- if(is_broader) sub_df$justification_text[i] else sub_df$justification[i]
+                                         paste0("<li><span style='color: #0D67B8; font-weight: bold;'>[", sub_df$target_label[i], "]</span><br><span style='color:grey;'><i>Justification: ", ifelse(is.na(just_text) || trimws(just_text)=="", "None", just_text), "</i></span></li>")
+                                       }), collapse = ""),
+                                       "</ul>")
+                      paste0("<li><b>", title, "</b>", t_list, "</li>")
+                    }), collapse = ""),
+                    "</ul>"))
       } else { HTML("<i>No threats mitigated.</i>") }
       
       log_html <- if(nrow(log_info) > 0) {
@@ -266,8 +309,9 @@ profile_server <- function(id, db, current_user, db_sync_trigger) {
           "<div style='line-height: 1.5; font-size: 0.95em;'>",
           "<b>Date:</b> ", as.character(log_info$logdate), "<br>",
           "<b>Logged By:</b> ", log_info$first_name, " ", log_info$last_name, "<br>",
-          "<b>Metric (", log_info$metric, "):</b> ", log_info$value, "<br>",
-          "<b>Notes:</b> <i>", ifelse(is.na(log_info$notes) | trimws(log_info$notes) == "", "No notes provided.", log_info$notes), "</i>",
+          "<b>Implementation:</b> ", get_status_badge(log_info$implementation_progress), "<br>",
+          "<b>Effectiveness:</b> ", get_status_badge(log_info$result_progress), "<br>",
+          "<b>Notes:</b> <i>", ifelse(is.na(log_info$what_done) | trimws(log_info$what_done) == "", "No notes provided.", log_info$what_done), "</i>",
           "</div>"
         ))
       } else { HTML("<i>No updates have been logged yet.</i>") }
@@ -276,44 +320,45 @@ profile_server <- function(id, db, current_user, db_sync_trigger) {
       fluidRow(
         # Top Row: Core Info (Spans the full 12 columns of this right-hand area)
         column(12, 
-               card(
-                 card_header("Details", style = "background-color: #07234c; color: white; font-weight: bold;"),
-                 card_body(
-                   HTML(paste0(
-                     "<div style='line-height: 1.6; font-size: 0.95em;'>",
-                     "<b>Action:</b> ", core_info$Action, "<br>",
-                     "<b>Timeframe:</b> ", core_info$timeframe, "<br>",
-                     "<b>Status:</b> ", core_info$status, "<br>",
-                     "<b>User Description:</b> <i>", 
-                     ifelse(is.na(core_info$actiondescription) | trimws(core_info$actiondescription) == "", "No custom description provided.", core_info$actiondescription),
-                     "</i></div>"
-                   ))
-                 )
+               div(class = "card shadow-sm mb-3",
+                   div(class = "card-header", style = "background-color: #07234c; color: white; font-weight: bold;", "Details"),
+                   div(class = "card-body",
+                       HTML(paste0(
+                         "<div style='line-height: 1.6; font-size: 0.95em;'>",
+                         "<b>Action:</b> ", core_info$Action, "<br>",
+                         "<b>Timeframe:</b> ", core_info$timeframe, "<br>",
+                         "<b>Implementation:</b> ", get_status_badge(core_info$implementation_progress), "<br>",
+                         "<b>Effectiveness:</b> ", get_status_badge(core_info$result_progress), "<br>",
+                         "<b>User Description:</b> <i>", 
+                         ifelse(is.na(core_info$actiondescription) | trimws(core_info$actiondescription) == "", "No custom description provided.", core_info$actiondescription),
+                         "</i></div>"
+                       ))
+                   )
                )
         ),
         
         # Bottom Row: 3 Detail Cards (Spanning 4 columns each)
         column(4,
-               card(
-                 card_header("Targeted Species/Habitats", style = "background-color: #0D67B8; color: white; font-weight: bold; font-size: 0.9em;"),
-                 card_body(style = "padding: 10px;", targ_html)
+               div(class = "card shadow-sm",
+                   div(class = "card-header", style = "background-color: #0D67B8; color: white; font-weight: bold; font-size: 0.9em;", "Targeted Species/Habitats"),
+                   div(class = "card-body", style = "padding: 10px;", targ_html)
                )
         ),
         column(4,
-               card(
-                 card_header("Mitigated Threats", style = "background-color: #A55A3D; color: white; font-weight: bold; font-size: 0.9em;"),
-                 card_body(style = "padding: 10px;", thr_html)
+               div(class = "card shadow-sm",
+                   div(class = "card-header", style = "background-color: #A55A3D; color: white; font-weight: bold; font-size: 0.9em;", "Mitigated Threats"),
+                   div(class = "card-body", style = "padding: 10px;", thr_html)
                )
         ),
         column(4,
-               card(
-                 card_header("Most Recent Update", style = "background-color: #E1A11E; color: white; font-weight: bold; font-size: 0.9em;"),
-                 card_body(style = "padding: 10px;", log_html)
+               div(class = "card shadow-sm",
+                   div(class = "card-header", style = "background-color: #E1A11E; color: white; font-weight: bold; font-size: 0.9em;", "Most Recent Update"),
+                   div(class = "card-body", style = "padding: 10px;", log_html)
                )
         )
       )
     })
-
+    
     return(
       list(
         go_login = reactive({ input$logout_btn })

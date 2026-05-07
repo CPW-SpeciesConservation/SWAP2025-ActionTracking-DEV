@@ -97,7 +97,7 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
       showModal(modalDialog(
         title = h4(strong(selected_row$Action), class="mb-0", style="color: #07234C;"),
         size = "xl", easyClose = FALSE, fade = TRUE,
-        footer = tagList(actionButton(ns("btn_close_modal"), "Close Dashboard", class = "btn-secondary")),
+        footer = tagList(actionButton(ns("btn_close_modal"), "Close Window", class = "btn-secondary")),
         
         navset_underline(
           id = ns("modal_tabs"),

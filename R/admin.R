@@ -60,6 +60,7 @@ admin_server <- function(id, db, current_user, db_sync_trigger) {
     ns <- session$ns
     
     all_users <- reactive({ db_sync_trigger(); dbGetQuery(db, "SELECT id, first_name || ' ' || last_name AS name, email, agency, role FROM public.profiles ORDER BY name") })
+    
     output$users_table <- renderDT({ datatable(all_users(), selection = "single", rownames = FALSE, options = list(
       dom = 'ft',   paging = FALSE,          
       scrollY = "250px",       
@@ -67,9 +68,16 @@ admin_server <- function(id, db, current_user, db_sync_trigger) {
       columnDefs = list(list(visible = FALSE, targets = 0)))) })
     
     output$selected_user_info <- renderUI({ req(input$users_table_rows_selected); user_row <- all_users()[input$users_table_rows_selected, ]; tagList(p(strong("User: "), user_row$name, br(), strong("Email: "), user_row$email)) })
-    observeEvent(input$btn_save_role, { req(input$users_table_rows_selected); user_row <- all_users()[input$users_table_rows_selected, ]; dbExecute(db, "UPDATE public.profiles SET role = $1 WHERE id = $2", params = list(input$new_role, user_row$id)); showNotification("Role updated!", type = "message"); refresh_trigger(db_sync_trigger() + 1) })
     
-    # Action Delegation
+    observeEvent(input$btn_save_role, { 
+      req(input$users_table_rows_selected) 
+      user_row <- all_users()[input$users_table_rows_selected, ] 
+      dbExecute(db, "UPDATE public.profiles SET role = $1 WHERE id = $2", params = list(input$new_role, user_row$id)) 
+      showNotification("Role updated!", type = "message") 
+      db_sync_trigger(db_sync_trigger() + 1) 
+    })
+    
+    # THE FIX: Group by Action ID and Aggregate the Target strings
     all_actions <- reactive({
       db_sync_trigger()
       query <- "
@@ -78,15 +86,20 @@ admin_server <- function(id, db, current_user, db_sync_trigger) {
           l2.actionl2code || '. ' || l2.actionl2name AS \"Action\",
           ia.actiondesc AS \"User Description\",
           COALESCE(p.first_name || ' ' || p.last_name, 'No Author Recorded') AS \"Created By\",
-          CASE WHEN sha.specieshabitat = TRUE THEN 'Species' ELSE 'Habitat' END AS \"Target\"
+          STRING_AGG(DISTINCT CASE WHEN sha.specieshabitat = TRUE THEN 'Species' ELSE 'Habitat' END, ', ') AS \"Target\"
         FROM track.implementedactions ia
         LEFT JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id
         LEFT JOIN public.profiles p ON ia.createdby = p.id::text
         LEFT JOIN track.specieshabitatactions sha ON ia.implementedactionid = sha.implementedactionid
+        GROUP BY ia.implementedactionid, l2.actionl2code, l2.actionl2name, ia.actiondesc, p.first_name, p.last_name
+        ORDER BY ia.implementedactionid DESC
       "
       df <- dbGetQuery(db, query)
       
-      if (input$filter_type != "All") df <- df[df$"Target" == input$filter_type, ]
+      # THE FIX: Use grepl to find the target word inside the aggregated string
+      if (input$filter_type != "All") {
+        df <- df[grepl(input$filter_type, df$"Target"), ]
+      }
       
       df
     })
@@ -152,7 +165,7 @@ admin_server <- function(id, db, current_user, db_sync_trigger) {
       dbExecute(db, "INSERT INTO track.delegateusers (implementedactionid, userid) VALUES ($1, $2)", 
                 params = list(as.integer(all_actions()$ID[input$actions_table_rows_selected]), input$new_delegate_id))
       showNotification("Delegate added!", type = "message")
-      refresh_trigger(db_sync_trigger() + 1)
+      db_sync_trigger(db_sync_trigger() + 1)
     })
   })
 }

@@ -586,9 +586,9 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       action_name <- all_actions_data()[input$all_actions_table_rows_selected, "Action"]
       
       showModal(modalDialog(
-        title = h4(strong(action_name), class="mb-0", style="color: #07234C;"),
+        title = h4(strong(action_name), class="mb-0 w-100 text-start", style="color: #07234C; text-align: left;"),
         size = "xl", easyClose = TRUE, fade = TRUE,
-        footer = tagList(actionButton(ns("btn_close_all_actions_modal"), "Close Profile", class = "btn-secondary")),
+        footer = tagList(actionButton(ns("btn_close_all_actions_modal"), "Close Window", class = "btn-secondary")),
         
         navset_underline(
           id = ns("all_actions_modal_tabs"),
