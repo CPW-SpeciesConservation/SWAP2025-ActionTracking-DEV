@@ -305,11 +305,12 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       datatable(df, selection = "single", rownames = F, options = list(dom = 't', paging= FALSE, scrollY="250px", scrollCollapse=TRUE, columnDefs = list(list(visible = F, targets = c(0, 1, 3, 6)))))
     })
     
+    # THE FIX: Added length() and is.null() checks to prevent logical(0) crashes
     output$targ_desc_ui <- renderUI({
       req(input$target_actions_table_rows_selected)
       row <- targ_actions_data()[input$target_actions_table_rows_selected, ]
-      desc <- if(is.na(row$actiondesc) || trimws(row$actiondesc) == "") "No description provided." else row$actiondesc
-      detail <- if(is.na(row$`Action Detail`) || trimws(row$`Action Detail`) == "") "None" else row$`Action Detail`
+      desc <- if(length(row$actiondesc) == 0 || is.na(row$actiondesc) || trimws(row$actiondesc) == "") "No description provided." else row$actiondesc
+      detail <- if(length(row$`Action Detail`) == 0 || is.na(row$`Action Detail`) || trimws(row$`Action Detail`) == "") "None" else row$`Action Detail`
       tagList(p(class = "mb-2", strong("Impl. Progress: "), row$`Impl. Progress`, span(style="margin: 0 10px;", "|"), strong("Timeframe: "), row$Timeframe), p(class = "mb-2", strong("Description: "), br(), em(desc)), p(class = "mb-0", strong("Detail: "), br(), em(detail)))
     })
     
@@ -440,22 +441,24 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       datatable(df, selection = "single", rownames = F, options = list(dom = 'ft', paging = FALSE, scrollY = "250px", scrollCollapse = TRUE, info = FALSE, columnDefs = list(list(visible = F, targets = c(0, 4)))))
     })
     
+    # THE FIX: Added length() and is.null() checks to prevent logical(0) crashes
     output$act_desc_ui <- renderUI({
       req(input$action_targets_table_rows_selected); row <- act_targets_data()[input$action_targets_table_rows_selected, ]
-      desc <- if(is.na(row$actiondesc) || trimws(row$actiondesc) == "") "No description provided." else row$actiondesc
+      desc <- if(length(row$actiondesc) == 0 || is.na(row$actiondesc) || trimws(row$actiondesc) == "") "No description provided." else row$actiondesc
       tagList(p(class = "mb-2", strong("Impl. Progress: "), row$`Impl. Progress`, span(style="margin: 0 10px;", "|"), strong("Timeframe: "), row$Timeframe), p(class = "mb-0", strong("Description: "), br(), em(desc)))
     })
     
+    # THE FIX: Changed 'threats_df$threat_name' to 'threats_df$t_name' so it correctly references the SQL column alias.
     output$act_threats_ui <- renderUI({
       req(input$action_targets_table_rows_selected); impl_id <- act_targets_data()[input$action_targets_table_rows_selected, "implementedactionid"]
       q <- "SELECT l2.threatl2id, l2.threatl2code || '. ' || l2.threatl2name AS t_name, ta.justification, ta.alternative_category, ta.justification_text, STRING_AGG(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END, ', ') AS target_labels FROM track.threatsaddressed ta JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id LEFT JOIN proj.species s ON sha.speciesid = s.speciesid LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid WHERE sha.implementedactionid = $1 GROUP BY l2.threatl2id, l2.threatl2code, l2.threatl2name, ta.justification, ta.alternative_category, ta.justification_text ORDER BY t_name ASC"
       threats_df <- dbGetQuery(db, q, params = list(as.integer(impl_id)))
       
       if(nrow(threats_df) > 0) {
-        threats_df$group_name <- ifelse(threats_df$threatl2id == 59, paste0("Broader Goal: ", threats_df$alternative_category), threats_df$threat_name)
+        threats_df$group_name <- ifelse(threats_df$threatl2id == 59, paste0("Broader Goal: ", threats_df$alternative_category), threats_df$t_name)
         tags$ul(class = "mt-2 mb-0", lapply(unique(threats_df$group_name), function(g) {
           sub_df <- threats_df[threats_df$group_name == g, ]; is_broader <- sub_df$threatl2id[1] == 59
-          title <- if(is_broader) strong("Broader Goal: ", style="color: #0D67B8;", sub_df$alternative_category[1]) else strong(sub_df$threat_name[1])
+          title <- if(is_broader) strong("Broader Goal: ", style="color: #0D67B8;", sub_df$alternative_category[1]) else strong(sub_df$t_name[1])
           t_list <- tags$ul(class="mt-1 mb-3", style="list-style-type:circle;", lapply(1:nrow(sub_df), function(i) tags$li(span(class="text-primary fw-bold", sub_df$target_labels[i]), " - ", em(if(is_broader) sub_df$justification_text[i] else sub_df$justification[i]))))
           tags$li(class="mb-2", title, t_list)
         }))
