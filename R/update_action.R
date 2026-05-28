@@ -27,16 +27,6 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     
-    # Helper for color-coded status badges
-    get_status_badge <- function(status) {
-      if (is.null(status) || is.na(status)) return(span(class = "badge bg-secondary", "Unknown"))
-      color <- switch(status,
-                      "Completed" = "bg-success", "Achieved" = "bg-success", "On-track" = "bg-success",
-                      "Minor issues" = "bg-warning text-dark", "Partially achieved" = "bg-warning text-dark",
-                      "Major issues" = "bg-danger", "Not achieved" = "bg-danger", "Abandoned" = "bg-danger",
-                      "bg-secondary")
-      span(class = paste("badge", color), status)
-    }
     
     # --- FETCH ACTIONS ---
     action_data <- reactive({
@@ -75,7 +65,6 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
     
     # --- STATE TRACKERS ---
     preloaded_geom <- reactiveVal(NULL)
-    last_drawn_scale <- reactiveVal(NULL)
     
     # ==========================================
     # THE MEGAMODAL LOGIC
@@ -174,7 +163,6 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
       updateCheckboxInput(session, "map_edit_mode", value = FALSE)
       updateSelectInput(session, "upd_spatial_scale", choices = allowed_scales, selected = current_scale)
       preloaded_geom(current_geom)
-      last_drawn_scale(NULL) 
     })
     
     output$lbl_current_scale <- renderText({ input$upd_spatial_scale })
@@ -183,7 +171,6 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
       removeModal()
       selectRows(proxy_action_table, NULL) 
       preloaded_geom(NULL)
-      last_drawn_scale(NULL)
     })
     
     # ==========================================
@@ -197,8 +184,10 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
       impl_badge <- get_status_badge(action_data()[input$action_table_rows_selected, "Implementation"])
       eff_badge <- get_status_badge(action_data()[input$action_table_rows_selected, "Effectiveness"])
       
+      desc_text <- if (is.na(desc) || trimws(desc) == "") "No description provided." else desc
+      
       tagList(
-        p(strong("Description: "), if(is.na(desc) || desc=="") "No description provided." else desc),
+        p(strong("Description: "), desc_text),
         p(strong("Current Implementation: "), impl_badge),
         p(strong("Current Effectiveness: "), eff_badge)
       )
@@ -265,10 +254,14 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
       "
       collabs_df <- dbGetQuery(db, q_collabs, params = list(as.integer(impl_id)))
       
-      collab_list <- tags$ul(class = "mt-2 mb-0", lapply(1:nrow(collabs_df), function(i) {
-        badge_color <- if(collabs_df$access_level[i] == "Creator") "bg-primary" else "bg-secondary"
-        tags$li(strong(collabs_df$name[i]), span(class = paste("badge ms-2", badge_color), collabs_df$access_level[i]))
-      }))
+      collab_list <- if (nrow(collabs_df) > 0) {
+        tags$ul(class = "mt-2 mb-0", lapply(seq_len(nrow(collabs_df)), function(i) {
+          badge_color <- if(collabs_df$access_level[i] == "Creator") "bg-primary" else "bg-secondary"
+          tags$li(strong(collabs_df$name[i]), span(class = paste("badge ms-2", badge_color), collabs_df$access_level[i]))
+        }))
+      } else {
+        p(em("No collaborators found."))
+      }
       
       if (selected_row$Role == "Creator") {
         q_avail <- "
@@ -335,7 +328,6 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
     # ==========================================
     # MODAL TAB 3: SPATIAL UPDATES
     # ==========================================
-    preloaded_geom <- reactiveVal(NULL)
     
     # OBSERVER: If they unlock the map and switch to "Range", fetch it on the fly so they can save it!
     observeEvent(input$upd_spatial_scale, {
@@ -350,18 +342,31 @@ update_action_server <- function(id, db, current_user, db_sync_trigger) {
       q_hab <- "SELECT DISTINCT habitatsubtypeid FROM track.specieshabitatactions WHERE implementedactionid = $1 AND specieshabitat = FALSE"
       hab_ids <- dbGetQuery(db, q_hab, params = list(as.integer(impl_id)))$habitatsubtypeid
       
-      all_geoms <- list()
+      # Build query parts for each geometry source, then union them all in one PostGIS call
+      all_parts <- c()
       if (length(sp_ids[!is.na(sp_ids)]) > 0) {
-        q_sp_geom <- sprintf("SELECT ST_AsGeoJSON(ST_Union(ST_MakeValid(geom))) AS geojson FROM proj.species_ranges WHERE speciesid IN (%s)", paste(as.integer(sp_ids[!is.na(sp_ids)]), collapse = ","))
-        res_sp <- dbGetQuery(db, q_sp_geom)
-        if (nrow(res_sp) > 0 && !is.na(res_sp$geojson[1])) all_geoms <- c(all_geoms, res_sp$geojson[1])
+        all_parts <- c(all_parts, sprintf(
+          "SELECT geom FROM proj.species_ranges WHERE speciesid IN (%s)",
+          paste(as.integer(sp_ids[!is.na(sp_ids)]), collapse = ",")
+        ))
       }
       if (length(hab_ids[!is.na(hab_ids)]) > 0) {
-        q_hab_geom <- sprintf("SELECT ST_AsGeoJSON(ST_Union(ST_MakeValid(geom))) AS geojson FROM proj.habitat_ranges WHERE habitatsubtypeid IN (%s)", paste(as.integer(hab_ids[!is.na(hab_ids)]), collapse = ","))
-        res_hab <- dbGetQuery(db, q_hab_geom)
-        if (nrow(res_hab) > 0 && !is.na(res_hab$geojson[1])) all_geoms <- c(all_geoms, res_hab$geojson[1])
+        all_parts <- c(all_parts, sprintf(
+          "SELECT geom FROM proj.habitat_ranges WHERE habitatsubtypeid IN (%s)",
+          paste(as.integer(hab_ids[!is.na(hab_ids)]), collapse = ",")
+        ))
       }
-      if (length(all_geoms) > 0) preloaded_geom(all_geoms[[1]]) # Save the calculated range to memory
+      if (length(all_parts) > 0) {
+        q_combined <- paste0(
+          "SELECT ST_AsGeoJSON(ST_Union(ST_MakeValid(geom))) AS geojson FROM (",
+          paste(all_parts, collapse = " UNION ALL "),
+          ") combined_ranges"
+        )
+        res_combined <- dbGetQuery(db, q_combined)
+        if (nrow(res_combined) > 0 && !is.na(res_combined$geojson[1])) {
+          preloaded_geom(res_combined$geojson[1])
+        }
+      }
     }, ignoreInit = TRUE)
     
     # THE MAP RENDERER: Builds the map natively with the geometry already attached!

@@ -73,16 +73,6 @@ profile_server <- function(id, db, current_user, db_sync_trigger) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns 
     
-    get_status_badge <- function(status) {
-      if (is.null(status) || is.na(status)) return(span(class = "badge bg-secondary", "Unknown"))
-      color <- switch(status,
-                      "Completed" = "bg-success", "Achieved" = "bg-success", "On-track" = "bg-success",
-                      "Minor issues" = "bg-warning text-dark", "Partially achieved" = "bg-warning text-dark",
-                      "Major issues" = "bg-danger", "Not achieved" = "bg-danger", "Abandoned" = "bg-danger",
-                      "bg-secondary")
-      as.character(span(class = paste("badge", color), status))
-    }
-    
     observe({
       req(current_user())
       if (current_user()$role != "admin") {
@@ -97,14 +87,15 @@ profile_server <- function(id, db, current_user, db_sync_trigger) {
     output$admin_users_ui <- renderUI({ req(current_user()$role == "admin"); admin_ui_users(ns("admin_logic")) })
     output$admin_delegation_ui <- renderUI({ req(current_user()$role == "admin"); admin_ui_actions(ns("admin_logic")) })
     
-    observe({ req(current_user()); if(current_user()$role == "admin") { admin_server("admin_logic", db, current_user, db_sync_trigger) } })
+    
+    admin_server("admin_logic", db, current_user, db_sync_trigger)
     
     output$admin_badge_ui <- renderUI({ req(current_user()); if (current_user()$role == "admin") { div(class = "mb-3", span(class = "badge bg-warning text-dark px-2 py-1", style = "font-size: 0.9em;", "Admin")) } else { NULL } })
     
     observe({
       req(current_user())
       agencies <- dbGetQuery(db, "SELECT agencyname FROM lkup.Agency ORDER BY agencyname")
-      updateSelectInput(session, "agency", choices = agencies$agency_name)
+      updateSelectInput(session, "agency", choices = agencies$agencyname)
       prof <- dbGetQuery(db, "SELECT * FROM public.profiles WHERE id = $1", params = list(current_user()$user_id))
       if(nrow(prof) > 0) {
         updateTextInput(session, "first_name", value = prof$first_name)
@@ -135,7 +126,7 @@ profile_server <- function(id, db, current_user, db_sync_trigger) {
       req(current_user()); db_sync_trigger()
       query <- "SELECT DISTINCT ia.implementedactionid AS \"ID\", l2.actionl2code || '. ' || l2.actionl2name AS \"Action\", ia.implementation_progress AS \"Status\" FROM track.implementedactions ia LEFT JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id LEFT JOIN track.delegateusers du ON ia.implementedactionid = du.implementedactionid WHERE ia.createdby = $1::text OR du.userid = $1::text ORDER BY \"ID\" DESC"
       df <- dbGetQuery(db, query, params = list(current_user()$user_id))
-      if(nrow(df) > 0) df$Status <- sapply(df$Status, get_status_badge)
+      if(nrow(df) > 0) df$Status <- sapply(df$Status, function(s) as.character(get_status_badge(s)))
       df
     })
     
@@ -154,11 +145,27 @@ profile_server <- function(id, db, current_user, db_sync_trigger) {
       db_sync_trigger(db_sync_trigger() + 1) # Force UI refresh
     })
     
-    observeEvent(input$del_reminder_id, {
-      req(input$del_reminder_id)
-      dbExecute(db, "DELETE FROM track.action_reminders WHERE reminder_id = $1", params = list(as.integer(input$del_reminder_id)))
-      showNotification("Reminder deleted.", type="message")
-      db_sync_trigger(db_sync_trigger() + 1) # Force UI refresh
+    # Step 1: User clicks trash → store the ID and show confirmation modal
+    observeEvent(input$pending_del_reminder_id, {
+      req(input$pending_del_reminder_id)
+      showModal(modalDialog(
+        title = "Delete Reminder?",
+        p("Are you sure you want to delete this reminder? This cannot be undone."),
+        footer = tagList(
+          modalButton("Cancel"),
+          actionButton(ns("confirm_del_reminder"), "Yes, Delete It", class = "btn-danger", style = "font-weight: bold;")
+        ),
+        easyClose = TRUE
+      ))
+    })
+    
+    # Step 2: User confirms → delete and dismiss
+    observeEvent(input$confirm_del_reminder, {
+      req(input$pending_del_reminder_id)
+      dbExecute(db, "DELETE FROM track.action_reminders WHERE reminder_id = $1", params = list(as.integer(input$pending_del_reminder_id)))
+      removeModal()
+      showNotification("Reminder deleted.", type = "message")
+      db_sync_trigger(db_sync_trigger() + 1)
     })
     
     output$action_details_ui <- renderUI({
@@ -204,9 +211,8 @@ profile_server <- function(id, db, current_user, db_sync_trigger) {
         tags$ul(class="list-group mb-3 shadow-sm", lapply(1:nrow(reminders), function(i) {
           tags$li(class="list-group-item d-flex justify-content-between align-items-center p-2",
                   tagList(span(class="fw-bold", style="color: #07234c;", reminders$formatted_date[i]), span(class="text-muted ms-2 small", paste0("(", reminders$frequency[i], ")"))),
-                  tags$button(class="btn btn-sm btn-outline-danger border-0", icon("trash"), 
-                              onclick = sprintf("Shiny.setInputValue('%s', %d, {priority: 'event'})", ns("del_reminder_id"), reminders$reminder_id[i]))
-          )
+                  tags$button(class="btn btn-sm btn-outline-danger border-0", icon("trash"),
+                              onclick = sprintf("Shiny.setInputValue('%s', %d, {priority: 'event'})", ns("pending_del_reminder_id"), reminders$reminder_id[i])))
         }))
       } else {
         p(em("No active reminders for this action.", class="text-muted text-center d-block mb-3"))

@@ -56,8 +56,8 @@ tryCatch({
     
     # Blastula grabs the password from the active memory
     creds <- creds_envvar(
-      user = Sys.getenv("MY_GMAIL_USER"),
-      pass_envvar = "MY_GMAIL_PASS", 
+      user = ACTIVE_GMAIL_USER,
+      pass_envvar = ACTIVE_GMAIL_PASS, 
       provider = "gmail"
     )
     

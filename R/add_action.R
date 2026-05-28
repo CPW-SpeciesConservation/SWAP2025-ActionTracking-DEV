@@ -328,6 +328,12 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
       for (t_id in selected_threats) { if (is.null(input[[paste0("just_threat_a_", t_id)]]) || trimws(input[[paste0("just_threat_a_", t_id)]]) == "") { showNotification("Please provide a justification for all selected standard threats.", type = "error"); return() } }
       if (alt_checked && (is.null(input$sel_alt_a) || input$sel_alt_a == "")) { showNotification("Please select a Primary Goal.", type = "error"); return() }
       
+      # Validate: Custom scale requires a drawn polygon
+      if (input$spatial_scale_a == "Custom" && (is.null(input$action_map_a_draw_all_features) || length(input$action_map_a_draw_all_features$features) == 0)) {
+        showNotification("You chose 'Custom' spatial scale but did not draw a polygon. Please draw a boundary on the map, or change the scale to 'Statewide' or 'Range'.", type = "error", duration = 8)
+        return()
+      }
+      
       geom_json <- NA_character_
       if (input$spatial_scale_a == "Custom" && !is.null(input$action_map_a_draw_all_features) && length(input$action_map_a_draw_all_features$features) > 0) {
         geom_json <- as.character(jsonlite::toJSON(input$action_map_a_draw_all_features$features[[1]]$geometry, auto_unbox = TRUE))
@@ -550,8 +556,30 @@ add_action_server <- function(id, db, current_user, db_sync_trigger) {
       sel_hab <- input$act_target_habitats
       if (length(sel_sp) == 0 && length(sel_hab) == 0) { showNotification("Please select at least one target.", type = "error"); return() }
       
-      for (sp_id in sel_sp) { threats <- dbGetQuery(db, "SELECT threatl2id FROM xref.species_threatsl2 WHERE speciesid = $1 AND threatl2id != 59", params = list(sp_id)); any_standard <- any(sapply(threats$threatl2id, function(t_id) isTRUE(input[[paste0("act_chk_sp_", sp_id, "_", t_id)]]))); alt_checked <- isTRUE(input[[paste0("act_chk_alt_sp_", sp_id)]]); if (!any_standard && !alt_checked) { showNotification("Please select at least one threat or broader goal for all selected species.", type = "error"); return() } }
-      for (hab_id in sel_hab) { threats <- dbGetQuery(db, "SELECT threatl2id FROM xref.habitat_threatsl2 WHERE habitatsubtypeid = $1 AND threatl2id != 59", params = list(hab_id)); any_standard <- any(sapply(threats$threatl2id, function(t_id) isTRUE(input[[paste0("act_chk_hab_", hab_id, "_", t_id)]]))); alt_checked <- isTRUE(input[[paste0("act_chk_alt_hab_", hab_id)]]); if (!any_standard && !alt_checked) { showNotification("Please select at least one threat or broader goal for all selected habitats.", type = "error"); return() } }
+      for (sp_id in sel_sp) {
+        threats      <- dbGetQuery(db, "SELECT threatl2id FROM xref.species_threatsl2 WHERE speciesid = $1 AND threatl2id != 59", params = list(sp_id))
+        any_standard <- any(sapply(threats$threatl2id, function(t_id) isTRUE(input[[paste0("act_chk_sp_", sp_id, "_", t_id)]])))
+        alt_checked  <- isTRUE(input[[paste0("act_chk_alt_sp_", sp_id)]])
+        if (!any_standard && !alt_checked) {
+          showNotification("Please select at least one threat or broader goal for all selected species.", type = "error")
+          return()
+        }
+      }
+      
+      for (hab_id in sel_hab) {
+        threats      <- dbGetQuery(db, "SELECT threatl2id FROM xref.habitat_threatsl2 WHERE habitatsubtypeid = $1 AND threatl2id != 59", params = list(hab_id))
+        any_standard <- any(sapply(threats$threatl2id, function(t_id) isTRUE(input[[paste0("act_chk_hab_", hab_id, "_", t_id)]])))
+        alt_checked  <- isTRUE(input[[paste0("act_chk_alt_hab_", hab_id)]])
+        if (!any_standard && !alt_checked) {
+          showNotification("Please select at least one threat or broader goal for all selected habitats.", type = "error")
+          return()
+        }
+      }
+      # Validate: Custom scale requires a drawn polygon
+      if (input$spatial_scale_b == "Custom" && (is.null(input$action_map_b_draw_all_features) || length(input$action_map_b_draw_all_features$features) == 0)) {
+        showNotification("You chose 'Custom' spatial scale but did not draw a polygon. Please draw a boundary on the map, or change the scale to 'Statewide'.", type = "error", duration = 8)
+        return()
+      }
       
       geom_json <- NA_character_
       if (input$spatial_scale_b == "Custom" && !is.null(input$action_map_b_draw_all_features) && length(input$action_map_b_draw_all_features$features) > 0) geom_json <- as.character(jsonlite::toJSON(input$action_map_b_draw_all_features$features[[1]]$geometry, auto_unbox = TRUE))

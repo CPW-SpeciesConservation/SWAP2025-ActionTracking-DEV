@@ -56,7 +56,8 @@ resource_library_server <- function(id, db, db_sync_trigger) {
     ns <- session$ns
     
     observe({
-      db_sync_trigger() 
+      db_sync_trigger()
+      local_res_cache$reset()  # Flush stale data so new resources appear immediately
       tax_groups <- get_res_tax_groups(db)
       updateSelectInput(session, "res_tax_group", choices = c("Select group..." = "", tax_groups$groupname))
       habitats <- get_res_major_habitats(db)

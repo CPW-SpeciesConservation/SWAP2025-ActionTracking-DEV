@@ -18,7 +18,10 @@ library(leaflet.extras)
 library(sf)
 library(jsonlite)
 
+#update max size for upload
+options(shiny.maxRequestSize = 50 * 1024^2)
 # Source all helpers and modules
+source("R/utils.R")
 source("R/db_connections.R")
 source("R/dashboard.R")
 source("R/resource_library.R") # 1. ADDED SOURCE
@@ -28,6 +31,7 @@ source("R/update_action.R")
 source("R/auth.R")
 source("R/admin.R")
 source("R/add_resource.R")
+
 
 cpw_theme <- bs_theme(
   version = 5, bg = "#FFFFFF", fg = "#212529", primary = "#0D67B8", 

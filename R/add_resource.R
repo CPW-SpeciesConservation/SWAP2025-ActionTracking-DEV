@@ -3,12 +3,11 @@ library(bslib)
 library(httr)
 library(jsonlite)
 library(DBI)
-library(shinyjs) # Added for the reset functionality
+library(shinyjs) 
 
 add_resource_ui <- function(id) {
   ns <- NS(id)
   tagList(
-    # THE FIX 1: CSS to darken the Browse button
     tags$style(HTML("
       .btn-file { background-color: #0D67B8 !important; color: #FFFFFF !important; font-weight: bold; border: none; }
       .btn-file:hover { background-color: #07234C !important; }
@@ -66,7 +65,9 @@ add_resource_ui <- function(id) {
                 conditionalPanel(
                   condition = sprintf("input['%s'] == 'Document (Upload File)'", ns("resource_type")),
                   fileInput(ns("resource_file"), "Upload Document (PDF, Word, Excel)", width = "100%",
-                            accept = c(".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv"))
+                            accept = c(".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv")),
+                  # THE FIX: Added 500 MB Note
+                  p(class = "text-muted small", style = "margin-top: -10px;", "Maximum file size: 50 MB.") 
                 ),
                 
                 hr(),
@@ -108,6 +109,11 @@ add_resource_server <- function(id, db, current_user) {
     
     # --- Handle Form Submission ---
     observeEvent(input$btn_submit, {
+      
+      # THE FIX: Disable the button so they don't click it twice, and ensure it re-enables when the function finishes!
+      shinyjs::disable("btn_submit")
+      on.exit(shinyjs::enable("btn_submit"), add = TRUE)
+      
       # 1. Validation
       is_species <- input$target_type == "Species"
       target_val <- if(is_species) input$species_id else input$habitat_id
@@ -140,39 +146,45 @@ add_resource_server <- function(id, db, current_user) {
       if (is_url) {
         final_url <- trimws(input$resource_url)
       } else {
-        # Supabase Storage Upload Logic
-        base_url <- Sys.getenv("SUPABASE_URL")
-        api_key <- Sys.getenv("SUPABASE_ANON_KEY")
-        user_token <- current_user()$token
-        
-        # Clean the filename to prevent URL issues, prepend timestamp to ensure uniqueness
-        safe_filename <- paste0(as.integer(Sys.time()), "_", gsub("[^[:alnum:]._-]", "", input$resource_file$name))
-        
-        # THE FIX: Determine the correct MIME type based on the file extension
-        file_ext <- tolower(tools::file_ext(safe_filename))
-        mime_type <- switch(file_ext,
-                            "pdf" = "application/pdf",
-                            "csv" = "text/csv",
-                            "doc" = "application/msword",
-                            "docx" = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            "xls" = "application/vnd.ms-excel",
-                            "xlsx" = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            "application/octet-stream" # Fallback
-        )
-        
-        # Endpoint to upload to our 'swap-resources' bucket
-        storage_endpoint <- paste0(base_url, "/storage/v1/object/swap-resources/", safe_filename)
-        
-        # Push file to Supabase via API
-        upload_res <- httr::POST(
-          url = storage_endpoint,
-          httr::add_headers(
-            apikey = api_key,
-            Authorization = paste("Bearer", user_token),
-            `Content-Type` = mime_type # <-- Pass the correct MIME type here!
-          ),
-          body = httr::upload_file(input$resource_file$datapath, type = mime_type)
-        )
+        # THE FIX: Wrap the file upload inside a progress bar!
+        withProgress(message = 'Uploading document...', detail = 'Please wait, large files can take a few minutes.', value = 0.5, {
+          
+          # Supabase Storage Upload Logic
+          base_url <- Sys.getenv("SUPABASE_URL")
+          api_key <- Sys.getenv("SUPABASE_ANON_KEY")
+          user_token <- current_user()$token
+          
+          # Clean the filename to prevent URL issues, prepend timestamp to ensure uniqueness
+          safe_filename <- paste0(as.integer(Sys.time()), "_", gsub("[^[:alnum:]._-]", "", input$resource_file$name))
+          
+          # Determine the correct MIME type based on the file extension
+          file_ext <- tolower(tools::file_ext(safe_filename))
+          mime_type <- switch(file_ext,
+                              "pdf" = "application/pdf",
+                              "csv" = "text/csv",
+                              "doc" = "application/msword",
+                              "docx" = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                              "xls" = "application/vnd.ms-excel",
+                              "xlsx" = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                              "application/octet-stream" # Fallback
+          )
+          
+          # Endpoint to upload to our 'swap-resources' bucket
+          storage_endpoint <- paste0(base_url, "/storage/v1/object/swap-resources/", safe_filename)
+          
+          # Push file to Supabase via API - Wrapped in suppressWarnings to silence the harmless connection warning
+          upload_res <- suppressWarnings(
+            httr::POST(
+              url = storage_endpoint,
+              httr::add_headers(
+                apikey = api_key,
+                Authorization = paste("Bearer", user_token),
+                `Content-Type` = mime_type 
+              ),
+              body = httr::upload_file(input$resource_file$datapath, type = mime_type)
+            )
+          )
+        })
         
         if (httr::status_code(upload_res) >= 400) {
           err <- httr::content(upload_res)
@@ -196,10 +208,17 @@ add_resource_server <- function(id, db, current_user) {
           dbExecute(db, q_insert, params = list(as.integer(target_val), trimws(input$resource_name), db_res_type, final_url, user_uuid))
         }
         
-        # THE FIX 2: Reset UI Text AND clear the File Input cache using shinyjs
+        # UI Form Reset
+        updateRadioButtons(session, "target_type", selected = "Species")
+        updateSelectizeInput(session, "tax_group", selected = "")
+        updateSelectizeInput(session, "species_id", choices = c("Select a group first..." = ""), selected = "")
+        updateSelectizeInput(session, "major_hab", selected = "")
+        updateSelectizeInput(session, "habitat_id", choices = c("Select a habitat first..." = ""), selected = "")
+        
+        updateRadioButtons(session, "resource_type", selected = "URL (Link to website)")
         updateTextInput(session, "resource_name", value = "")
         updateTextInput(session, "resource_url", value = "")
-        shinyjs::reset(session$ns("resource_file")) # Empties the upload box!
+        shinyjs::reset(session$ns("resource_file")) # Empties the upload box
         
         output$status_msg <- renderUI(span(style="color: green; font-weight: bold;", "Success! Resource added to the library."))
         

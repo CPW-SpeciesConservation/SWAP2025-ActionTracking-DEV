@@ -180,6 +180,32 @@ dashboard_ui <- function(id) {
                                     div(class = "card-header text-white", style = "background-color: #055A53;", "Tracked Actions"),
                                     div(class = "card-body",
                                         p(class="text-muted", "Click on any row to open the full Read-Only profile for that action."),
+                                        
+                                        # THE FIX: Hidden Accordion Console for advanced multi-select filtering
+                                        accordion(
+                                          open = FALSE, # Stays closed by default
+                                          accordion_panel(
+                                            title = HTML("<strong style='color: #0D67B8;'><i class='fas fa-filter'></i>Filter Options</strong>"),
+                                            layout_columns(
+                                              col_widths = c(4, 4, 4, 6, 6, 6, 6), # 3 on top, 2x2 on bottom
+                                              selectizeInput(ns("filter_impl_status"), "Implementation Progress:", 
+                                                             choices = c("Not specified", "Scheduled for future", "Major issues", "Minor issues", "On-track", "Completed", "Abandoned"), 
+                                                             multiple = TRUE, options = list(placeholder = "Select status(es)...")),
+                                              selectizeInput(ns("filter_action"), "Actions:", choices = NULL, multiple = TRUE, options = list(placeholder = "Select action(s)...")),
+                                              
+                                              # NEW: Date Range Filter
+                                              dateRangeInput(ns("filter_last_update"), "Last Progress Update:", start = NA, end = NA, width = "100%"),
+                                              
+                                              selectizeInput(ns("filter_tax_group"), "Taxonomic Group:", choices = NULL, multiple = TRUE, options = list(placeholder = "Select taxonomic group(s)...")),
+                                              selectizeInput(ns("filter_species"), "Species:", choices = NULL, multiple = TRUE, options = list(placeholder = "Select species...")),
+                                              
+                                              selectizeInput(ns("filter_major_hab"), "Major Habitat:", choices = NULL, multiple = TRUE, options = list(placeholder = "Select major habitat(s)...")),
+                                              selectizeInput(ns("filter_habitat"), "Habitat Subtype:", choices = NULL, multiple = TRUE, options = list(placeholder = "Select habitat(s)..."))
+                                            )
+                                          )
+                                        ),
+                                        
+                                        hr(),
                                         DTOutput(ns("all_actions_table"))
                                     )
                                 )
@@ -188,7 +214,7 @@ dashboard_ui <- function(id) {
       ),
       
       # ==================================================
-      # TAB 4: VISUALIZATIONS (REFACTORED)
+      # TAB 4: VISUALIZATIONS
       # ==================================================
       nav_panel("Explore Action/Threat Connections",
                 div(class = "mt-3",
@@ -305,7 +331,6 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       datatable(df, selection = "single", rownames = F, options = list(dom = 't', paging= FALSE, scrollY="250px", scrollCollapse=TRUE, columnDefs = list(list(visible = F, targets = c(0, 1, 3, 6)))))
     })
     
-    # THE FIX: Added length() and is.null() checks to prevent logical(0) crashes
     output$targ_desc_ui <- renderUI({
       req(input$target_actions_table_rows_selected)
       row <- targ_actions_data()[input$target_actions_table_rows_selected, ]
@@ -441,14 +466,12 @@ dashboard_server <- function(id, db, db_sync_trigger) {
       datatable(df, selection = "single", rownames = F, options = list(dom = 'ft', paging = FALSE, scrollY = "250px", scrollCollapse = TRUE, info = FALSE, columnDefs = list(list(visible = F, targets = c(0, 4)))))
     })
     
-    # THE FIX: Added length() and is.null() checks to prevent logical(0) crashes
     output$act_desc_ui <- renderUI({
       req(input$action_targets_table_rows_selected); row <- act_targets_data()[input$action_targets_table_rows_selected, ]
       desc <- if(length(row$actiondesc) == 0 || is.na(row$actiondesc) || trimws(row$actiondesc) == "") "No description provided." else row$actiondesc
       tagList(p(class = "mb-2", strong("Impl. Progress: "), row$`Impl. Progress`, span(style="margin: 0 10px;", "|"), strong("Timeframe: "), row$Timeframe), p(class = "mb-0", strong("Description: "), br(), em(desc)))
     })
     
-    # THE FIX: Changed 'threats_df$threat_name' to 'threats_df$t_name' so it correctly references the SQL column alias.
     output$act_threats_ui <- renderUI({
       req(input$action_targets_table_rows_selected); impl_id <- act_targets_data()[input$action_targets_table_rows_selected, "implementedactionid"]
       q <- "SELECT l2.threatl2id, l2.threatl2code || '. ' || l2.threatl2name AS t_name, ta.justification, ta.alternative_category, ta.justification_text, STRING_AGG(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END, ', ') AS target_labels FROM track.threatsaddressed ta JOIN track.specieshabitatactions sha ON ta.specieshabitatactionsid = sha.specieshabitatactionsid JOIN proj.l2_threats l2 ON ta.threatl2id = l2.threatl2id LEFT JOIN proj.species s ON sha.speciesid = s.speciesid LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid WHERE sha.implementedactionid = $1 GROUP BY l2.threatl2id, l2.threatl2code, l2.threatl2name, ta.justification, ta.alternative_category, ta.justification_text ORDER BY t_name ASC"
@@ -557,6 +580,72 @@ dashboard_server <- function(id, db, db_sync_trigger) {
     # -----------------------------------------------------
     # TAB 3 LOGIC (ALL ACTIONS Table + Megamodal)
     # -----------------------------------------------------
+    
+    # THE FIX: Store mapping data in memory so R can filter the dropdowns instantly
+    filter_lookups <- reactiveValues(spp = NULL, habs = NULL)
+    
+    observe({
+      db_sync_trigger()
+      
+      # 1. Sort Actions numerically using Postgres GROUP BY to bypass the DISTINCT rule
+      acts_query <- "
+        SELECT l2.actionl2code || '. ' || l2.actionl2name AS act 
+        FROM proj.l2_actions l2 
+        JOIN track.implementedactions ia ON l2.actionl2id = ia.actionl2id 
+        GROUP BY l2.actionl2code, l2.actionl2name
+        ORDER BY CAST(SPLIT_PART(l2.actionl2code, '.', 1) AS INTEGER), 
+                 CAST(SPLIT_PART(l2.actionl2code, '.', 2) AS INTEGER)
+      "
+      acts <- dbGetQuery(db, acts_query)
+      updateSelectizeInput(session, "filter_action", choices = acts$act)
+      
+      # 2. Fetch and store the lookup tables for the hierarchical filters (ONLY targets with tracked actions)
+      filter_lookups$spp <- dbGetQuery(db, "
+        SELECT DISTINCT s.commonname, tg.groupname 
+        FROM proj.species s 
+        JOIN proj.taxonomicgroups tg ON s.taxonomicgroupid = tg.taxonomicgroupid 
+        JOIN track.specieshabitatactions sha ON s.speciesid = sha.speciesid
+        ORDER BY s.commonname
+      ")
+      
+      filter_lookups$habs <- dbGetQuery(db, "
+        SELECT DISTINCT hs.habitatsubtypename, mh.majorhabitatname 
+        FROM proj.habitatsubtypes hs 
+        JOIN proj.majorhabitats mh ON hs.majorhabitatid = mh.majorhabitatid 
+        JOIN track.specieshabitatactions sha ON hs.habitatsubtypeid = sha.habitatsubtypeid
+        ORDER BY hs.habitatsubtypename
+      ")
+      # 3. Populate the parent dropdowns
+      updateSelectizeInput(session, "filter_tax_group", choices = sort(unique(filter_lookups$spp$groupname)))
+      updateSelectizeInput(session, "filter_major_hab", choices = sort(unique(filter_lookups$habs$majorhabitatname)))
+    })
+    
+    # THE FIX: Hierarchical Filter for Tax Group -> Species
+    observeEvent(input$filter_tax_group, {
+      req(filter_lookups$spp)
+      if (is.null(input$filter_tax_group) || length(input$filter_tax_group) == 0) {
+        # If nothing is selected, show all species
+        updateSelectizeInput(session, "filter_species", choices = filter_lookups$spp$commonname)
+      } else {
+        # Filter species to match ONLY the selected taxonomic group(s)
+        filtered_spp <- filter_lookups$spp$commonname[filter_lookups$spp$groupname %in% input$filter_tax_group]
+        updateSelectizeInput(session, "filter_species", choices = filtered_spp)
+      }
+    }, ignoreNULL = FALSE)
+    
+    # THE FIX: Hierarchical Filter for Major Habitat -> Habitat Subtype
+    observeEvent(input$filter_major_hab, {
+      req(filter_lookups$habs)
+      if (is.null(input$filter_major_hab) || length(input$filter_major_hab) == 0) {
+        # If nothing is selected, show all habitats
+        updateSelectizeInput(session, "filter_habitat", choices = filter_lookups$habs$habitatsubtypename)
+      } else {
+        # Filter habitats to match ONLY the selected major habitat(s)
+        filtered_habs <- filter_lookups$habs$habitatsubtypename[filter_lookups$habs$majorhabitatname %in% input$filter_major_hab]
+        updateSelectizeInput(session, "filter_habitat", choices = filtered_habs)
+      }
+    }, ignoreNULL = FALSE)
+    
     get_status_badge <- function(status) {
       if (is.null(status) || is.na(status)) return(span(class = "badge bg-secondary", "Unknown"))
       color <- switch(status,
@@ -569,15 +658,99 @@ dashboard_server <- function(id, db, db_sync_trigger) {
     
     all_actions_data <- reactive({
       db_sync_trigger()
-      q <- "SELECT ia.implementedactionid, TO_CHAR(ia.createdon, 'MM/DD/YYYY') AS \"Date Submitted\", l2.actionl2name AS \"Action\", CASE WHEN tgts.t_count = 1 THEN tgts.first_targ WHEN tgts.t_count > 1 THEN 'Multiple' ELSE 'None' END AS \"Targets\", ia.implementation_progress AS \"Impl. Progress\" FROM track.implementedactions ia JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id LEFT JOIN (SELECT sha.implementedactionid, COUNT(sha.specieshabitatactionsid) AS t_count, MAX(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END) AS first_targ FROM track.specieshabitatactions sha LEFT JOIN proj.species s ON sha.speciesid = s.speciesid LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid GROUP BY sha.implementedactionid) tgts ON ia.implementedactionid = tgts.implementedactionid ORDER BY ia.implementedactionid DESC"
+      
+      # THE FIX: Added a LEFT JOIN to track.actiontracking to pull the MAX date
+      q <- "
+        SELECT 
+          ia.implementedactionid, 
+          TO_CHAR(ia.createdon, 'MM/DD/YYYY') AS \"Date Submitted\", 
+          l2.actionl2code || '. ' || l2.actionl2name AS \"Action\",
+          CASE WHEN tgts.t_count = 1 THEN tgts.first_targ WHEN tgts.t_count > 1 THEN 'Multiple' ELSE 'None' END AS \"Targets\",
+          ia.implementation_progress AS \"Impl. Progress\",
+          COALESCE(TO_CHAR(trk.last_update_date, 'MM/DD/YYYY'), 'No Updates') AS \"Last Update\",
+          trk.last_update_date AS raw_last_update,
+          tgts.all_tax_groups,
+          tgts.all_species,
+          tgts.all_major_habs,
+          tgts.all_habitats
+        FROM track.implementedactions ia 
+        JOIN proj.l2_actions l2 ON ia.actionl2id = l2.actionl2id
+        LEFT JOIN (
+          SELECT sha.implementedactionid,
+                 COUNT(sha.specieshabitatactionsid) AS t_count,
+                 MAX(CASE WHEN sha.specieshabitat = TRUE THEN s.commonname ELSE hs.habitatsubtypename END) AS first_targ,
+                 STRING_AGG(DISTINCT tg.groupname, '|||') AS all_tax_groups,
+                 STRING_AGG(DISTINCT s.commonname, '|||') AS all_species,
+                 STRING_AGG(DISTINCT mh.majorhabitatname, '|||') AS all_major_habs,
+                 STRING_AGG(DISTINCT hs.habitatsubtypename, '|||') AS all_habitats
+          FROM track.specieshabitatactions sha
+          LEFT JOIN proj.species s ON sha.speciesid = s.speciesid
+          LEFT JOIN proj.taxonomicgroups tg ON s.taxonomicgroupid = tg.taxonomicgroupid
+          LEFT JOIN proj.habitatsubtypes hs ON sha.habitatsubtypeid = hs.habitatsubtypeid
+          LEFT JOIN proj.majorhabitats mh ON hs.majorhabitatid = mh.majorhabitatid
+          GROUP BY sha.implementedactionid
+        ) tgts ON ia.implementedactionid = tgts.implementedactionid
+        LEFT JOIN (
+          SELECT implementedactionid, MAX(actiondate) AS last_update_date
+          FROM track.actiontracking
+          GROUP BY implementedactionid
+        ) trk ON ia.implementedactionid = trk.implementedactionid
+        ORDER BY ia.implementedactionid DESC
+      "
       df <- dbGetQuery(db, q)
-      if(nrow(df) > 0) df$`Impl. Progress` <- sapply(df$`Impl. Progress`, get_status_badge)
+      
+      # Apply R-side multi-select filters using grepl before badge conversion
+      if (length(input$filter_impl_status) > 0) {
+        df <- df[!is.na(df$`Impl. Progress`) & df$`Impl. Progress` %in% input$filter_impl_status, ]
+      }
+      if (length(input$filter_action) > 0) {
+        df <- df[!is.na(df$Action) & df$Action %in% input$filter_action, ]
+      }
+      if (length(input$filter_tax_group) > 0) {
+        pattern <- paste(input$filter_tax_group, collapse = "|")
+        df <- df[!is.na(df$all_tax_groups) & grepl(pattern, df$all_tax_groups), ]
+      }
+      if (length(input$filter_species) > 0) {
+        pattern <- paste(input$filter_species, collapse = "|")
+        df <- df[!is.na(df$all_species) & grepl(pattern, df$all_species), ]
+      }
+      if (length(input$filter_major_hab) > 0) {
+        pattern <- paste(input$filter_major_hab, collapse = "|")
+        df <- df[!is.na(df$all_major_habs) & grepl(pattern, df$all_major_habs), ]
+      }
+      if (length(input$filter_habitat) > 0) {
+        pattern <- paste(input$filter_habitat, collapse = "|")
+        df <- df[!is.na(df$all_habitats) & grepl(pattern, df$all_habitats), ]
+      }
+      
+      # NEW: Apply Date Range Filter for Last Update
+      if (!is.null(input$filter_last_update)) {
+        start_date <- input$filter_last_update[1]
+        end_date <- input$filter_last_update[2]
+        
+        if (!is.na(start_date)) {
+          df <- df[!is.na(df$raw_last_update) & as.Date(df$raw_last_update) >= start_date, ]
+        }
+        if (!is.na(end_date)) {
+          df <- df[!is.na(df$raw_last_update) & as.Date(df$raw_last_update) <= end_date, ]
+        }
+      }
+      
+      # Convert status to badge HTML and drop the raw helper columns
+      if (nrow(df) > 0) df$`Impl. Progress` <- sapply(df$`Impl. Progress`, function(s) as.character(get_status_badge(s)))
+      df$raw_last_update <- NULL
+      df$all_tax_groups <- NULL
+      df$all_species <- NULL
+      df$all_major_habs <- NULL
+      df$all_habitats <- NULL
+      
       df
     })
     
     output$all_actions_table <- renderDT({
       datatable(all_actions_data(), escape = FALSE, selection = "single", rownames = F, options = list(
-        dom = 'ftip', pageLength = 15, scrollY = "calc(100vh - 280px)", scrollCollapse = TRUE, info = FALSE, columnDefs = list(list(visible = F, targets = c(0)))
+        dom = 'ftip', pageLength = 15, scrollY = "calc(100vh - 350px)", scrollCollapse = TRUE, info = FALSE,
+        columnDefs = list(list(visible = FALSE, targets = 0))  # hide ID (index 0)
       ))
     })
     
