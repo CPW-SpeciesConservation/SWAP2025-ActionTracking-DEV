@@ -886,7 +886,7 @@ dashboard_server <- function(id, db, db_sync_trigger) {
     
     # --- 4A. Plotly Sankey ---
     output$sankey_plot <- renderPlotly({
-      req(input$conn_nav_tabs == "sankey") # Wait until tab is active!
+      req(input$conn_nav_tabs == "sankey") 
       df <- links_data(); req(nrow(df) > 0)
       
       df <- df %>% mutate(
